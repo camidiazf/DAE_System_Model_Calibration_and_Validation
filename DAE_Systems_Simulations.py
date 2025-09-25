@@ -1,11 +1,34 @@
+import os
+from typing import Dict, List, Optional
+
 import casadi as ca # type: ignore
 import numpy as np
 import pandas as pd
+from mealpy.swarm_based import PSO # type: ignore
+
 from System_info import system_info as system_data
 
+import sys
+import contextlib
+
+# Suppress all output from PSO Optimization to avoid cluttering the console during optimization
+# Comment this out if you want to see the output from PSO
+# Note: This will suppress all output, including errors in the optimization, so use with caution.
+@contextlib.contextmanager
+def suppress_all_output():
+    with open(os.devnull, 'w') as fnull:
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = fnull
+        sys.stderr = fnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
 
 # Growth dynamics function
-def DAE_system(t, x, z, params):
+def DAE_system(t: float, x: np.ndarray, z: np.ndarray, params: Dict[str, float]) -> ca.MX:
     """
     Function to define the DAE system for the growth dynamics.
     Parameters:
@@ -16,13 +39,17 @@ def DAE_system(t, x, z, params):
     Returns:
         - dXdt: vector of differential equations.
     """
+
     constants = system_data['constants']
+    
     # State variables
     X, C, N, CO2, O = x[0], x[1], x[2], x[3], x[4]
+
     # Algebraic variable
     pH = z[0] 
 
     # Explicit algebraic equations
+
     # pH inhibition factor
     Iph = ca.exp((params['I_val'] * ((pH - params['pH_UL']) / (params['pH_UL'] - params['pH_LL']))) ** 2)
 
@@ -38,97 +65,83 @@ def DAE_system(t, x, z, params):
     ka7 = 10 ** (-constants['pka7'])
 
     # Differential equations
-    dXdt   = (mu- params['k_d']) * X                                                     # Biomass
-    dCdt   = - (mu / params['YX_C']) * X                                             # Glycerol
-    dNdt   = - (mu / params['YX_N']) * X                                             # Ammonia
-    dCO2dt = ((mu / params['YX_CO2']) * X) - ka7 * (CO2 / (((10 ** -pH) / ka7) + 1))  # CO2
-    dOdt   = params['k_La'] * (params['O2_sat'] - O) - (mu / params['YX_O2']) * X    # O2
+    dXdt   = (mu- params['k_d']) * X                                                    # Biomass
+    dCdt   = - (mu / params['YX_C']) * X                                                # Glycerol
+    dNdt   = - (mu / params['YX_N']) * X                                                # Ammonia
+    dCO2dt = ((mu / params['YX_CO2']) * X) - ka7 * (CO2 / (((10 ** -pH) / ka7) + 1))    # CO2
+    dOdt   = params['k_La'] * (params['O2_sat'] - O) - (mu / params['YX_O2']) * X       # O2
 
     return ca.vertcat(dXdt, dCdt, dNdt, dCO2dt, dOdt)
 
-
-def DAE_system_calibrating(t, x, z, p, parameters, param_list):
+def DAE_system_calibrating(t: float, x: np.ndarray, z: np.ndarray, p: np.ndarray, parameters: Dict[str, float], param_list: List[str]) -> ca.MX:
     """
     Function to define the DAE system for calibration.
-    Parameters:
-        - t: time variable.
-        - x: state variables.
-        - z: algebraic variables.
-        - p: parameters to calibrate.
-        - parameters: dictionary of fixed parameters.
-        - param_list: list of parameter names to calibrate.
-    Returns:
-        - dXdt: vector of differential equations.
-
-    This function performs the following steps:
-    1. Updates the global parameters with the provided values.
-    2. Extracts the state variables and algebraic variable from the input.
-    3. Computes the algebraic variable based on the provided parameters.
-    4. Defines the differential equations for the system.
-    5. Returns the vector of differential equations.
-
     """
-    constants = system_data['constants']
-    for key, value in parameters.items():
-        globals()[key] = value
     
-    for i, param in enumerate(param_list):
-        globals()[param] = p[i]
+    # Extract system constants
+    constants = system_data['constants']
+    
+    # Parameters to calibrate as variables
+    pars = parameters.copy()
+    for i, name in enumerate(param_list):
+        pars[name] = p[i]
 
+    # State variables and algebraic variable
     X, C, N, CO2, O = x[0], x[1], x[2], x[3], x[4]
     pH = z[0] 
 
-    Iph = ca.exp((globals()['I_val'] * ((pH - globals()['pH_UL']) / (globals()['pH_UL'] - globals()['pH_LL']))) ** 2)  
+    # Explicit algebraic equations
+
+    # pH inhibition factor
+    Iph = ca.exp((pars['I_val'] * ((pH - pars['pH_UL']) / (pars['pH_UL'] - pars['pH_LL']))) ** 2)  
 
     # Specific growth rate
-    mu = (globals()['mu_max'] 
-        * (1 - ca.exp(-t / globals()['t_lag']))   
-        * (C / (C + globals()['k_C']))   
-        * (N / (N + globals()['k_N']))   
-        * (O / (O + globals()['k_O']))  
-        * (1 - (X / (globals()['Xmax']))) 
+    mu = (pars['mu_max'] 
+        * (1 - ca.exp(-t / pars['t_lag']))   
+        * (C / (C + pars['k_C']))   
+        * (N / (N + pars['k_N']))   
+        * (O / (O + pars['k_O']))  
+        * (1 - (X / (pars['Xmax']))) 
         * Iph)
 
     ka7 = 10 ** (-constants['pka7'])
 
     # Differential equations
-    dXdt   = (mu - globals()['k_d']) * X                                                    # Biomass
-    dCdt   = - (mu / globals()['YX_C']) * X                                                 # Glycerol
-    dNdt   = - (mu / globals()['YX_N']) * X                                                 # Ammonia
-    dCO2dt = ((mu / globals()['YX_CO2']) * X) - ka7 * (CO2 / (((10 ** -pH) / ka7) + 1))     # CO2
-    dOdt   = globals()['k_La'] * (globals()['O2_sat'] - O) - (mu / globals()['YX_O2']) * X  # O2  
+    dXdt   = (mu - pars['k_d']) * X                                                    # Biomass
+    dCdt   = - (mu / pars['YX_C']) * X                                                 # Glycerol
+    dNdt   = - (mu / pars['YX_N']) * X                                                 # Ammonia
+    dCO2dt = ((mu / pars['YX_CO2']) * X) - ka7 * (CO2 / (((10 ** -pH) / ka7) + 1))     # CO2
+    dOdt   = pars['k_La'] * (pars['O2_sat'] - O) - (mu / pars['YX_O2']) * X            # O2  
 
     return ca.vertcat(dXdt, dCdt, dNdt, dCO2dt, dOdt)
 
-
-def simulate_model(simulation_type, x0, parameters, time, p_vars=None, param_list=None):
+def simulate_model(simulation_type: str, x0: np.ndarray, parameters: Dict[str, float], 
+                    time: np.ndarray, p_vars: Optional[np.ndarray] = None, 
+                    param_list: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
     """
     Function to simulate the DAE system.
-    Parameters:
-        - simulation_type: 'calibrating' or 'normal'.
-        - x0: initial conditions for the state variables.
-        - parameters: dictionary of fixed parameters.
-        - time: time vector for the simulation.
-        - p_vars: parameters to calibrate (only for 'calibrating' type).
-        - param_list: list of parameter names to calibrate (only for 'calibrating' type).
-    Returns:
-        - df_results: DataFrame with the simulation results.
-
+    Simulation can be of type 'calibrating' or 'normal'.
+    If 'calibrating', p_vars and param_list must be provided.
+    Returns a DataFrame with the simulation results.
     """
+    # Extract system constants
     constants = system_data['constants']
+
     # Symbolic variables
-    t = ca.MX.sym('t')
-    x = ca.MX.sym('x', 5)  # [X, C, N, CO2, O2]
-    z = ca.MX.sym('z')     # [pH]
+    t = ca.MX.sym('t')                      # time
+    x = ca.MX.sym('x', 5)      # State variables [X, C, N, CO2, O2]
+    z = ca.MX.sym('z')                      # Algebraic variable [pH]
 
     # Systems's differential equations
     if simulation_type == 'calibrating':
-        dxdt = DAE_system_calibrating(t, x, z, p_vars, parameters, param_list)
-    elif simulation_type == 'normal':
-        dxdt = DAE_system(t, x, z, parameters) 
+        p = ca.MX.sym('p', len(param_list))
+        dxdt = DAE_system_calibrating(t, x, z, p, parameters, param_list)
+    else:
+        p = ca.MX.sym('p', 0) 
+        dxdt = DAE_system(t, x, z, parameters)
 
-    # Algebraic equation
-    # Parameters
+    # Algebraic equations
+
     ka1 = 10 ** (-constants['pka1'])  # KH2PO4
     ka2 = 10 ** (-constants['pka2'])  # C6H8O7
     ka3 = 10 ** (-constants['pka3'])  # (C6H7O7)-
@@ -138,7 +151,6 @@ def simulate_model(simulation_type, x0, parameters, time, p_vars=None, param_lis
 
     H = 10 ** (-z) 
 
-    # Concentration of charges according to H+ ions
     KHPO4 = constants['KH2PO4'] / ((H / ka1) + 1)
     C6H5O7 = constants['C6H8O7'] / ((H ** 3 / (ka2 * ka3 * ka4)) + (H ** 2 / (ka3 * ka4)) + (H / ka4) + 1)
     C6H6O7 = (H / ka4) * C6H5O7
@@ -152,19 +164,20 @@ def simulate_model(simulation_type, x0, parameters, time, p_vars=None, param_lis
     f = ca.Function('f', [t, x, z], [dxdt])
     
     # ODE system
-    dae = {'t': t, 'x': x, 'z': z, 'ode': f(t, x, z), 'alg': f_z}
-    integrator = ca.integrator('integrator', 'idas', dae, {'grid': time, 'output_t0': True})
+    dae = {'t': t, 'x': x, 'z': z, 'p': p, 'ode': dxdt, 'alg': f_z}
+    integrator = ca.integrator('F', 'idas', dae, {'grid': time, 'output_t0': True})
 
     # Solve
-    simulation_run = True
-    dict_results = {}
     try:
-        sol = integrator(x0=x0[:-1], z0=x0[-1])
+        if simulation_type == 'calibrating':
+            sol = integrator(x0=x0[:-1], z0=x0[-1], p=p_vars)   
+        else:
+            sol = integrator(x0=x0[:-1], z0=x0[-1])
     except RuntimeError as e:
-        print("Integration was not performed:", e)
-        simulation_run = False
-        # You can decide what to return when it fails:
+        print("Integration failed:", e)
         return None
+
+    dict_results = {}
 
     # Extract results
     t = time
@@ -200,6 +213,5 @@ def simulate_model(simulation_type, x0, parameters, time, p_vars=None, param_lis
     dict_results['H'] = H
     dict_results['mu_values'] = mu_values
 
-    # Create DataFrame with results
     df_results = pd.DataFrame(dict_results)
     return df_results

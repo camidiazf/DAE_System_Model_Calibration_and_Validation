@@ -5,12 +5,14 @@ import pandas as pd
 System information for DAE system model calibration and validation.
 This module contains the system parameters, initial conditions, experimental data,
 and other constants required for the DAE system simulations.
+It also includes settings for parameter estimation and validation.
+As well as configurations for saving results and plotting.
 """
 
-
-# Variable names
+# Variable names for which we have experimental data (in this case there is no CO2 or O2 data)
 var_names = ['X', 'C', 'N', 'pH']
 
+# Colors for plotting
 colors = {
     'X': '#66C2A6',
     'C': '#FD8D62',
@@ -19,12 +21,7 @@ colors = {
     'O2': '#A7D854',
     'pH': '#E78AC3',
     'mu': '#B3B3B3'
-    } # Not necessary for the simulation, but useful for plotting
-
-# Simulation time parameters
-tf = 40
-n_steps = 500
-time_stamps_sim = np.linspace(0, tf, n_steps + 1)
+    } 
 
 # Original parameters
 parameters = {
@@ -63,10 +60,6 @@ constants = {'pka1': 6.86, # pKa of KH2PO4
             'pH_alk': 7.2,
             }
 
-# Experimental data
-df_exp = pd.read_excel('Experimental_data.xlsx', sheet_name='PE_Normal')
-df_val = pd.read_excel('Experimental_data.xlsx', sheet_name='V_Normal')
-
 # Initial conditions simulation PE (PARAMETER ESTIMATION)
 X0 = 0.229
 c0 = 5.389
@@ -87,8 +80,16 @@ o20 = 0.0001
 z0 = 7.2
 x0_sim_v = np.array([X0, c0, n0, co20, o20, z0])
 
-# Initial points experimental PE
+# Simulation time parameters
+tf = 100
+n_steps = 500
+time_stamps_sim = np.linspace(0, tf, n_steps + 1)
 
+# Experimental data import
+df_exp = pd.read_excel('Experimental_data.xlsx', sheet_name='PE_Normal') # PE = PARAMETER ESTIMATION
+df_val = pd.read_excel('Experimental_data.xlsx', sheet_name='V_Normal') # V or VAL = PARAMETER VALIDATION
+
+# Initial points experimental PE
 X0 = df_exp['X'][0]  
 c0 = df_exp['C'][0] 
 n0 = df_exp['N'][0] 
@@ -110,7 +111,6 @@ o20_v = 0.0001
 z0_v = df_val['pH'][0]  
 x0_exp_v = np.array([X0_v, c0_v, n0_v, co20_v, o20_v, z0_v]) 
 
-
 # Weights for experimental data
 weights_exp_stack = np.vstack([
                     df_exp.iloc[:, 2],
@@ -119,17 +119,33 @@ weights_exp_stack = np.vstack([
                     df_exp.iloc[:, 11]
                 ]).T
 
+# Experimental time parameters VAL
+t_exp_v = df_val['Time (hours)']
 
-# Experimental time parameters PE
-t_exp_v = df_exp['Time (Hours)']
-
-
-# Calibration DATA
-
+# Calibration settings
 delta = 1e-4
 correlation_threshold = 0.95
 perturbation = 0.10
 
+# Columns for data export
+column_names = []
+columns_values = []
+columns_t_values = []
+for key, value in parameters.items():
+    columns_values.append(key)
+    columns_t_values.append('t_value_' + key)
+
+columns_var_validation = []
+for var in var_names:
+    columns_var_validation.append('RMSE_' + var)
+    columns_var_validation.append('NMRSE_' + var)
+    columns_var_validation.append('MAPE_' + var)
+
+column_names.extend(['Model', 'Param Combo', 'lb', 'ub'])
+column_names.extend(columns_values)
+column_names.extend(columns_t_values)
+column_names.extend(columns_var_validation)
+column_names.extend(['RMSE', 'NMRSE', 'MAPE', 'AIC', 'BIC'])
 
 # System information dictionary
 system_info = {
@@ -150,6 +166,6 @@ system_info = {
     'weights_exp_stack': weights_exp_stack,
     'delta': delta,
     'correlation_threshold': correlation_threshold,
-    'perturbation': perturbation
-
+    'perturbation': perturbation,
+    'column_names': column_names
 }
