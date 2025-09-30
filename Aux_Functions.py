@@ -9,6 +9,7 @@ import logging
 from scipy import stats
 from numpy.linalg import cond, matrix_rank, pinv
 from statsmodels.stats.stattools import durbin_watson # type: ignore
+from itertools import combinations
 
 from DAE_Systems_Simulations import simulate_model
 from Plotting_functions import plot_sensitivity_analysis, plot_corr_matrix, plotting_comparison, plot_residuals_analysis
@@ -16,12 +17,22 @@ from System_info import system_info as system_data
 
 logger = logging.getLogger(__name__)
 
+# Combination function
+def all_param_combos(params, min_k=1, max_k=None):
+    n = len(params)
+    if max_k is None:
+        max_k = n
+    combos = []
+    for k in range(min_k, max_k + 1):
+        for combo in combinations(params, k):
+            combos.append(list(combo))
+    combos.reverse()  # Reverse the list to have larger combinations first
+    return combos   
+
 # Analysis functions
 def validation_analysis(iteration: int, 
                         parameters: Dict[str, float], 
-                        params_list: List[str], 
-                        fig_outdir: str, 
-                        new_og: Optional[Dict[str, float]] = None
+                        fig_outdir: str
                         ) -> Optional[Dict[str, any]]:
     """
     Function to perform validation analysis of the DAE system model.
@@ -29,8 +40,8 @@ def validation_analysis(iteration: int,
     Analisis includes residuals, RMSE, NRMSE, MAPE, AIC, BIC, and statistical tests on residuals.
     As well as plotting comparison of original and new parameters with validation data.
     """
-    print("        [--------------- Validation - Residual Analysis ---------------]                       ")
-    print(" ")
+    # print("        [--------------- Validation - Residual Analysis ---------------]                       ")
+    # print(" ")
 
     # Load system information
     x0_sim_v = system_data['x0_sim_v']
@@ -51,7 +62,7 @@ def validation_analysis(iteration: int,
     
     # Error check
     if sol is None:
-        print("!!!!!!!!!! Simulation for validation failed. Please check the parameters and initial conditions.")
+        # print("!!!!!!!!!! Simulation for validation failed. Please check the parameters and initial conditions.")
         return None
 
     for var in var_names:
@@ -76,8 +87,11 @@ def validation_analysis(iteration: int,
                                         'NRMSE': res_results_var[2],
                                         'AIC': None,
                                         'BIC': None})
-
-    res_results_model = residuals_equations(y_val_c, y_sim_c, params_list)
+    if iteration is None:
+        n_updated_parameters = system_data['n_updated_parameters']
+    else:
+        n_updated_parameters = len(system_data['calibrating_parameters'])  
+    res_results_model = residuals_equations(y_val_c, y_sim_c, n_updated_parameters)
 
     # AIC, BIC, RMSE, MAPE y NRMSE for the whole model
     val_results_df_rows.append({'Variable': 'Model',
@@ -89,7 +103,7 @@ def validation_analysis(iteration: int,
 
     # Create DataFrame with validation results
     val_results_df = pd.DataFrame(val_results_df_rows)
-    print(val_results_df)
+    # print(val_results_df)
 
     val_results_df_numeric = val_results_df.drop(columns=["Variable"]).to_numpy().flatten()
     val_results_df_numeric = [x for x in val_results_df_numeric if not pd.isna(x)]
@@ -120,19 +134,16 @@ def validation_analysis(iteration: int,
     plot_residuals_analysis(residuals, fig_outdir, iteration)
 
     # Plotting comparison of original and new parameters with validation data
-    plotting_comparison(iteration = iteration, 
-                        params_list=params_list,
+    plotting_comparison(iteration = iteration,
                         parameters_updated=parameters,
                         AIC = res_results_model[0][0],
-                        fig_outdir=fig_outdir,
-                        new_og=new_og)
+                        fig_outdir=fig_outdir)
 
     return {'Validation results': val_results_df_numeric,
             'Residuals': residuals}
 
 
 def parameter_analysis(iteration: int, 
-                        params_list: List, 
                         parameters: Dict[str, float],
                         fig_outdir: str
                         ) -> Optional[Dict[str, any]]:
@@ -147,8 +158,8 @@ def parameter_analysis(iteration: int,
     time_stamps_sim = system_data['time_stamps_sim']
     t_exp = system_data['t_exp']
 
-    print(" ")
-    print("        [----------------- Parameter Analysis -----------------]")
+    # print(" ")
+    # print("        [----------------- Parameter Analysis -----------------]")
 
     # Compute sensitivity by simulating with given parameters
     sensitivity = compute_sensitivity(x0 = x0_sim,
@@ -157,17 +168,17 @@ def parameter_analysis(iteration: int,
                                         fig_outdir = fig_outdir,
                                         iteration = iteration) 
     
+    
     # Compute FIM using given parameters and experimental PE data
     FIM = compute_FIM(iteration = iteration,
                         x0= x0_exp, 
                         parameters = parameters, 
                         time_stamps = t_exp,
-                        params_list = params_list,
                         fig_outdir = fig_outdir)
 
     # Error check
     if FIM is None:
-        print("!!!!!!!!!!!!! FIM Analysis failed. Please check the parameters and initial conditions.")
+        # print("!!!!!!!!!!!!! FIM Analysis failed. Please check the parameters and initial conditions.")
         return None
     
     corr_matrix = FIM['correlation_matrix']
@@ -180,8 +191,7 @@ def parameter_analysis(iteration: int,
 
 # Optimization auxiliary function
 
-def define_cost_function(params_list: List[str], 
-                        new_og: Optional[Dict[str, float]] = None
+def define_cost_function(base_parameters: Dict[str, float]
                         ) -> callable:
     """
     Function to define the cost function for calibration using experimental data.
@@ -197,16 +207,6 @@ def define_cost_function(params_list: List[str],
     t_exp = system_data['t_exp']
     df_exp = system_data['df_exp']
 
-    parameters_og = system_data['parameters']
-    parameters_og_new = {}
-    if new_og is not None:
-        for key, value in parameters_og.items():
-            if key in list(new_og.keys()):
-                parameters_og_new[key] = new_og[key]
-            else:
-                parameters_og_new[key] = value
-    else:
-        parameters_og_new = parameters_og.copy()
 
     def cost_function(p_vars: np.ndarray) -> float: # COST FUNCTION USING PE DATA
         """
@@ -219,10 +219,9 @@ def define_cost_function(params_list: List[str],
         try:
             df_results = simulate_model(simulation_type='calibrating', 
                                         x0=x0_exp, 
-                                        parameters=parameters_og_new,
+                                        parameters=base_parameters,
                                         time=t_exp,
-                                        p_vars=p_vars,
-                                        param_list=params_list
+                                        p_vars=p_vars
                                     )
             
             err = 0
@@ -289,10 +288,10 @@ def sim_plus_minus(key: str,
                                 time=time_stamps)
 
     # Check for simulation failure
-    if sim_plus is None:
-        print(f"!!!!!!!!!!!!! Simulation plus with parameter {key} perturbed up failed. Please check the parameters and initial conditions.")
-    elif sim_minus is None:
-        print(f"!!!!!!!!!!!!! Simulation minus with parameter {key} perturbed down failed. Please check the parameters and initial conditions.")
+    # if sim_plus is None:
+    #     print(f"!!!!!!!!!!!!! Simulation plus with parameter {key} perturbed up failed. Please check the parameters and initial conditions.")
+    # elif sim_minus is None:
+    #     print(f"!!!!!!!!!!!!! Simulation minus with parameter {key} perturbed down failed. Please check the parameters and initial conditions.")
 
     if sim_plus is None or sim_minus is None:
         return None
@@ -309,7 +308,7 @@ def sim_plus_minus(key: str,
 
 def residuals_equations(y_val: np.ndarray, 
                         y_sim: np.ndarray, 
-                        params_list: Optional[List[str]] = None
+                        n_params_updated: Optional[List[str]] = None
                         ) -> Tuple[List[float], Optional[np.ndarray]]:
     """
     Function to compute residuals, RMSE, NRMSE, and MAPE between experimental and simulated data.
@@ -325,12 +324,13 @@ def residuals_equations(y_val: np.ndarray,
     nmrse = np.sqrt(np.mean(res**2)) / y_val_range
     
     mape = np.mean(np.abs(res/ y_val)) * 100
-
-    if params_list is None:
+    if n_params_updated is None:
         return [rmse, nmrse, mape]
+    elif n_params_updated == 0:
+        return [[' ', ' ', rmse, nmrse, mape], res]
     else:
         n = len(y_val)
-        k = len(params_list) 
+        k = n_params_updated
 
         rss = np.sum(res**2)
 
@@ -344,7 +344,6 @@ def compute_FIM(iteration: int,
                 x0: np.ndarray, 
                 parameters: Dict[str, float], 
                 time_stamps: np.ndarray, 
-                params_list: List[str], 
                 fig_outdir: str
                 ) -> Dict[str, Optional[np.ndarray]]:
 
@@ -352,9 +351,9 @@ def compute_FIM(iteration: int,
     Compute the Fisher Information Matrix (FIM), parameter correlation matrix, and t-values for sensitivity analysis.
     """
 
-    print(" ")
-    print("                    >>>> FIM Analysis <<<<")
-    print(" ")
+    # print(" ")
+    # print("                    >>>> FIM Analysis <<<<")
+    # print(" ")
 
     # Load system information and initialize variables
     weights_exp = system_data['weights_exp_stack']
@@ -392,7 +391,7 @@ def compute_FIM(iteration: int,
     corr_matrix = compute_correlation_matrix(fig_outdir, iteration, FIM)
 
     # Compute t-values
-    t_values_complete = compute_t_values(iteration, parameters, params_list, FIM)
+    t_values_complete = compute_t_values(iteration, parameters, FIM)
         
     return {'FIM': FIM,
             'correlation_matrix': corr_matrix,
@@ -455,22 +454,25 @@ def compute_correlation_matrix(fig_outdir: str,
 
 def compute_t_values(iteration: int, 
                     parameters: Dict[str, float],
-                    params_list: List[str], 
                     FIM: np.ndarray
                     ) -> List[Optional[float]]:
     """
     Function to compute t-values for the parameters based on the Fisher Information Matrix (FIM).
     """
-
+    if iteration is None:
+        params_list = []
+    else:
+        params_list = system_data['calibrating_parameters']
+    
     parameters_og_list = system_data['parameters_og_list']
 
     # If no parameters were calibrated, return None, as it is the initial parameter set
     if iteration is None:
         return [None] * len(parameters_og_list)
     
-    print(" ")
-    print("                    >>>> t-values <<<<") 
-    print(" ")
+    # print(" ")
+    # print("                    >>>> t-values <<<<") 
+    # print(" ")
 
     # Determine indices of calibrated parameters
     indices = [parameters_og_list.index(p) for p in params_list]
@@ -482,11 +484,11 @@ def compute_t_values(iteration: int,
     std_err[std_err == 0] = np.nan
     t_vals = theta / std_err
 
-    print("Computed t-values for calibrated parameters:")
-    print(f"{'Parameter':<15}{'θ':>12}{'SE':>12}{'t-value':>12}")
+    # print("Computed t-values for calibrated parameters:")
+    # print(f"{'Parameter':<15}{'θ':>12}{'SE':>12}{'t-value':>12}")
 
-    for p, th, se, tv in zip(params_list, theta, std_err, t_vals):
-        print(f"{p:<15}{th:12.6f}{se:12.6f}{tv:12.2f}")
+    # for p, th, se, tv in zip(params_list, theta, std_err, t_vals):
+    #     print(f"{p:<15}{th:12.6f}{se:12.6f}{tv:12.2f}")
 
     # Build complete list  (None for fixed parameters)
     t_values_complete: List[Optional[float]] = []
@@ -513,9 +515,9 @@ def compute_sensitivity(x0, parameters, time_stamps, fig_outdir, iteration):
     Returns a DataFrame with sensitivity values and generates sensitivity plots.
     """
 
-    print(" ")
-    print("                    >>>> Sensitivity Analysis <<<<")
-    print(" ")
+    # print(" ")
+    # print("                    >>>> Sensitivity Analysis <<<<")
+    # print(" ")
 
     perturbation = system_data['perturbation']
     parameters_og_list = system_data['parameters_og_list']
@@ -533,7 +535,7 @@ def compute_sensitivity(x0, parameters, time_stamps, fig_outdir, iteration):
                                             time=time_stamps)
     
     if model_sim_sensitivity is None:
-        print("!!!!!!!!!!!!! Simulation for base model sensitivity failed. Please check the parameters and initial conditions.")
+        # print("!!!!!!!!!!!!! Simulation for base model sensitivity failed. Please check the parameters and initial conditions.")
         return None
     
     for var in var_names:
@@ -552,7 +554,7 @@ def compute_sensitivity(x0, parameters, time_stamps, fig_outdir, iteration):
                                                 base_val=base_val)
         
         if sim_plus_minus_results is None:
-            print(f"!!!!!!!!!!!!! Validation Analysis for parameter {key} failed. Please check the parameters and initial conditions.")
+            # print(f"!!!!!!!!!!!!! Validation Analysis for parameter {key} failed. Please check the parameters and initial conditions.")
             return None
         
         sim_plus = sim_plus_minus_results[0]

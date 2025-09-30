@@ -26,7 +26,7 @@ colors = {
 # Original parameters
 parameters = {
     'k_C': 0.08, 
-    'k_N': 0.01, 
+    'k_N': 0.1, 
     'k_O' : 0.001, 
     'k_d': 0.001, 
     'YX_CO2': 0.35, 
@@ -38,9 +38,7 @@ parameters = {
     'pH_LL': 4.6, 
     'pH_UL': 7.4,
     'I_val': 3, 
-    'O2_sat' : 0.007267,
-    't_lag': 7,
-    'k_La' : 86.26
+    't_lag': 7
     } 
 
 parameters_og_list = list(parameters.keys()) 
@@ -58,6 +56,8 @@ constants = {'pka1': 6.86, # pKa of KH2PO4
             'KH2PO4': 2.18,
             'C6H8O7': 2,
             'pH_alk': 7.2,
+            'O2_sat' : 7.2673/1000,
+            'k_La' : 86.26
             }
 
 # Initial conditions simulation PE (PARAMETER ESTIMATION)
@@ -94,7 +94,7 @@ X0 = df_exp['X'][0]
 c0 = df_exp['C'][0] 
 n0 = df_exp['N'][0] 
 co20 = df_exp['CO2'][0]  # CO2 concentration in g/L
-o20 = parameters['O2_sat']  # O2 saturation in g/L
+o20 = constants['O2_sat']  # O2 saturation in g/L
 z0 = df_exp['pH'][0]  
 x0_exp = np.array([X0, c0, n0, co20, o20, z0]) 
 
@@ -124,8 +124,8 @@ t_exp_v = df_val['Time (hours)']
 
 # Calibration settings
 delta = 1e-4
-correlation_threshold = 0.95
-perturbation = 0.10
+correlation_threshold = 0.80
+perturbation = 0.05
 
 # Columns for data export
 column_names = []

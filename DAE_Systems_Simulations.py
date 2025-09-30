@@ -69,17 +69,18 @@ def DAE_system(t: float, x: np.ndarray, z: np.ndarray, params: Dict[str, float])
     dCdt   = - (mu / params['YX_C']) * X                                                # Glycerol
     dNdt   = - (mu / params['YX_N']) * X                                                # Ammonia
     dCO2dt = ((mu / params['YX_CO2']) * X) - ka7 * (CO2 / (((10 ** -pH) / ka7) + 1))    # CO2
-    dOdt   = params['k_La'] * (params['O2_sat'] - O) - (mu / params['YX_O2']) * X       # O2
+    dOdt   = constants['k_La'] * (constants['O2_sat'] - O) - (mu / params['YX_O2']) * X       # O2
 
     return ca.vertcat(dXdt, dCdt, dNdt, dCO2dt, dOdt)
 
-def DAE_system_calibrating(t: float, x: np.ndarray, z: np.ndarray, p: np.ndarray, parameters: Dict[str, float], param_list: List[str]) -> ca.MX:
+def DAE_system_calibrating(t: float, x: np.ndarray, z: np.ndarray, p: np.ndarray, parameters: Dict[str, float]) -> ca.MX:
     """
     Function to define the DAE system for calibration.
     """
     
     # Extract system constants
     constants = system_data['constants']
+    param_list = system_data['calibrating_parameters']
     
     # Parameters to calibrate as variables
     pars = parameters.copy()
@@ -111,13 +112,12 @@ def DAE_system_calibrating(t: float, x: np.ndarray, z: np.ndarray, p: np.ndarray
     dCdt   = - (mu / pars['YX_C']) * X                                                 # Glycerol
     dNdt   = - (mu / pars['YX_N']) * X                                                 # Ammonia
     dCO2dt = ((mu / pars['YX_CO2']) * X) - ka7 * (CO2 / (((10 ** -pH) / ka7) + 1))     # CO2
-    dOdt   = pars['k_La'] * (pars['O2_sat'] - O) - (mu / pars['YX_O2']) * X            # O2  
+    dOdt   = constants['k_La'] * (constants['O2_sat'] - O) - (mu / pars['YX_O2']) * X            # O2
 
     return ca.vertcat(dXdt, dCdt, dNdt, dCO2dt, dOdt)
 
 def simulate_model(simulation_type: str, x0: np.ndarray, parameters: Dict[str, float], 
-                    time: np.ndarray, p_vars: Optional[np.ndarray] = None, 
-                    param_list: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+                    time: np.ndarray, p_vars: Optional[np.ndarray] = None) -> Optional[pd.DataFrame]:
     """
     Function to simulate the DAE system.
     Simulation can be of type 'calibrating' or 'normal'.
@@ -134,6 +134,7 @@ def simulate_model(simulation_type: str, x0: np.ndarray, parameters: Dict[str, f
 
     # Systems's differential equations
     if simulation_type == 'calibrating':
+        param_list = system_data['calibrating_parameters']
         p = ca.MX.sym('p', len(param_list))
         dxdt = DAE_system_calibrating(t, x, z, p, parameters, param_list)
     else:
