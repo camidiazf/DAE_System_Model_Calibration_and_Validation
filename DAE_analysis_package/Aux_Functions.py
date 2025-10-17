@@ -13,10 +13,25 @@ from itertools import combinations
 
 from DAE_analysis_package.Plotting_functions import plot_sensitivity_analysis, plot_corr_matrix, plotting_comparison, plot_residuals_analysis
 
+"""
+Aux_functions.py
+
+This module contains auxiliary functions for DAE system model calibration and validation.
+Includes functions for parameter combinations, validation analysis, parameter analysis,
+cost function definition, sensitivity analysis, Fisher Information Matrix (FIM) computation,
+correlation matrix computation, t-values computation, and general utility functions.
+
+
+"""
+
 logger = logging.getLogger(__name__)
 
 # Combination function
 def all_param_combos(params, min_k=1, max_k=None):
+    """
+    Generate all combinations of parameters from size min_k to max_k.
+    Returns a list of lists, with larger combinations first.
+    """
     n = len(params)
     if max_k is None:
         max_k = n
@@ -37,7 +52,7 @@ def validation_analysis(system_data: Dict[str, any],
     """
     Function to perform validation analysis of the DAE system model.
     If new_og is provided, it updates the original parameters with new values for comparison.
-    Analisis includes residuals, RMSE, NRMSE, MAPE, AIC, BIC, and statistical tests on residuals.
+    Analysis includes residuals, RMSE, NRMSE, MAPE, AIC, BIC, and statistical tests on residuals.
     As well as plotting comparison of original and new parameters with validation data.
     """
     print("        [--------------- Validation - Residual Analysis ---------------]                       ")
@@ -145,7 +160,6 @@ def validation_analysis(system_data: Dict[str, any],
 
     return {'Validation results': val_results_df_numeric,
             'Residuals': residuals}
-
 
 def parameter_analysis(system_data: Dict[str, any],
                         simulate_model:callable,
@@ -322,7 +336,6 @@ def sim_plus_minus(system_data: Dict[str, any],
         Y_minus.append(sim_minus[var])
 
     return [Y_plus, Y_minus]
-
 
 def residuals_equations(y_val: np.ndarray, 
                         y_sim: np.ndarray, 
@@ -531,7 +544,6 @@ def compute_t_values(system_data: Dict[str, any],
         return [None] * len(parameters_og_list)
     
     return t_values_complete
-
 
 def compute_sensitivity(system_data: Dict[str, any],
                         simulate_model:callable,

@@ -11,10 +11,15 @@ import scipy.stats as stats
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
 
+"""
+Module containing plotting and saving functions for DAE system model calibration and validation.
+"""
 
 # Global functions to be used across plotting functions
 def _iter_index(iteration: Optional[int]) -> int:
-    """Map None -> 0 (original), otherwise i -> i+1."""
+    """Map None -> 0 (original), otherwise i -> i+1.
+    Function to handle iteration indexing for plotting and saving figures.
+    """
 
     return 0 if iteration is None else int(iteration) + 1
 
@@ -47,7 +52,6 @@ def figures_dir_from_csv_path(csv_path: str) -> str:
     """
     Generate a directory path for saving figures based on the CSV file path and ensure it exists.
     """
-
     outdir = os.path.join(os.path.dirname(csv_path), "Figures")
     _ensure_dir(outdir)
     return outdir
@@ -78,7 +82,6 @@ def plot_corr_matrix(fig_outdir: str,
     fig.tight_layout()
 
     save_fig(fig, fig_outdir, "Corr_Matrix", iteration)
-
 
 def plot_sensitivity_analysis(fig_outdir: str, 
                                 iteration: Optional[int],
@@ -256,6 +259,7 @@ def plotting_comparison(system_data: Dict[str, any],
     save_fig(fig, fig_outdir, "Plotting_Comparison", iteration)
 
 
+# Summary Plotting functions
 def plot_sensitivity_summary(fig_outdir: str, 
                             sensitivity_df_all: list
                             ) -> None:

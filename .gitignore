@@ -13,3 +13,4 @@ __pycache__/
 *.json
 *.vscode
 README copy.md
+Paper_results/

@@ -8,6 +8,11 @@ This module contains the system parameters, initial conditions, experimental dat
 and other constants required for the DAE system simulations.
 It also includes settings for parameter estimation and validation.
 As well as configurations for saving results and plotting.
+
+Regarding 'Experimental_data.xlsx', ensure it is placed in the same directory as this script.
+Recommended to use this Excel format for ease of data management according to this script.
+If using a different format, modify the data import section accordingly.
+
 """
 
 # Folder name of the Model you will be working with

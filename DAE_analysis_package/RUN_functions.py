@@ -22,6 +22,10 @@ from contextlib import contextmanager
 # Note: This will suppress all output, including errors in the optimization, so use with caution.
 @contextmanager
 def suppress_all_output():
+    """
+    Context manager to suppress all stdout and stderr output.
+    
+    """
     with open(os.devnull, 'w') as fnull:
         old_stdout = sys.stdout
         old_stderr = sys.stderr
@@ -96,7 +100,6 @@ def RUN_ALL_COMBOS(system_data: Dict[str, any],
 
     # return the aggregated CSV
     return pd.read_csv(csv_path)
-
 
 def RUN_PARAMETER_COMBO(system_data: Dict[str, any],
                         simulate_model:callable,
@@ -188,9 +191,6 @@ def RUN_PARAMETER_COMBO(system_data: Dict[str, any],
     print(f"\n>>> Scenario results saved to {csv_path}")
 
     return pd.read_csv(csv_path)
-
-
-
 
 def RUN_INITIAL(system_data: Dict[str, any],
                 simulate_model:callable,
@@ -312,7 +312,6 @@ def RUN_SCENARIO(system_data: Dict[str, any],
                             sensitivity_df_all=sensitivity_df_all, 
                             corr_matrix_all=corr_matrix_all, 
                             residuals_all=residuals_all)
-
 
 def RUN_PSO_CALIBRATION(system_data: Dict[str, any],
                         simulate_model:callable,

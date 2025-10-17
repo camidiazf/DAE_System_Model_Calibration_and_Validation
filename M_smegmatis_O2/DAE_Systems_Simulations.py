@@ -28,7 +28,7 @@ def suppress_all_output():
 # Growth dynamics function
 def DAE_system(system_data: Dict[str, any], t: float, x: np.ndarray, z: np.ndarray, params: Dict[str, float]) -> ca.MX:
     """
-    Function to define the DAE system for the growth dynamics.
+    Function to define the DAE system.
     Parameters:
         - t: time variable.
         - x: state variables.
