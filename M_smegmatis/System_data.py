@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 
@@ -7,7 +8,15 @@ This module contains the system parameters, initial conditions, experimental dat
 and other constants required for the DAE system simulations.
 It also includes settings for parameter estimation and validation.
 As well as configurations for saving results and plotting.
+
+Regarding 'Experimental_data.xlsx', ensure it is placed in the same directory as this script.
+Recommended to use this Excel format for ease of data management according to this script.
+If using a different format, modify the data import section accordingly.
+
 """
+
+# Folder name of the Model you will be working with
+model_folder_name = 'M_smegmatis'
 
 # Variable names for which we have experimental data (in this case there is no CO2 or O2 data)
 var_names = ['X', 'C', 'N', 'pH']
@@ -69,8 +78,10 @@ n_steps = 500
 time_stamps_sim = np.linspace(0, tf, n_steps + 1)
 
 # Experimental data import
-df_exp = pd.read_excel('Experimental_data.xlsx', sheet_name='PE_Normal') # PE = PARAMETER ESTIMATION
-df_val = pd.read_excel('Experimental_data.xlsx', sheet_name='V_Normal') # V or VAL = PARAMETER VALIDATION
+exp_data_path = os.path.join(os.getcwd(), model_folder_name, 'Experimental_data.xlsx')
+
+df_exp = pd.read_excel(exp_data_path, sheet_name='PE_Normal') # PE = PARAMETER ESTIMATION
+df_val = pd.read_excel(exp_data_path, sheet_name='V_Normal') # V or VAL = PARAMETER VALIDATION
 
 # Initial points experimental PE
 X0 = df_exp['X'][0]  
@@ -126,6 +137,7 @@ column_names.extend(columns_values)
 column_names.extend(columns_t_values)
 column_names.extend(columns_var_validation)
 column_names.extend(['RMSE', 'NMRSE', 'MAPE', 'AIC', 'BIC'])
+
 
 # System information dictionary
 system_data = {

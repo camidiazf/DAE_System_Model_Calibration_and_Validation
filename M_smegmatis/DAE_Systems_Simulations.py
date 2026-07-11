@@ -6,8 +6,6 @@ import numpy as np
 import pandas as pd
 from mealpy.swarm_based import PSO # type: ignore
 
-from M_smegmatis.System_data import system_data
-
 import sys
 import contextlib
 
@@ -28,7 +26,7 @@ def suppress_all_output():
             sys.stderr = old_stderr
 
 # Growth dynamics function
-def DAE_system(t: float, x: np.ndarray, z: np.ndarray, params: Dict[str, float]) -> ca.MX:
+def DAE_system(system_data: Dict[str, any], t: float, x: np.ndarray, z: np.ndarray, params: Dict[str, float]) -> ca.MX:
     """
     Function to define the DAE system for the growth dynamics.
     Parameters:
@@ -71,7 +69,7 @@ def DAE_system(t: float, x: np.ndarray, z: np.ndarray, params: Dict[str, float])
 
     return ca.vertcat(dXdt, dCdt, dNdt, dCO2dt)
 
-def DAE_system_calibrating(t: float, x: np.ndarray, z: np.ndarray, p: np.ndarray, parameters: Dict[str, float]) -> ca.MX:
+def DAE_system_calibrating(system_data: Dict[str, any], t: float, x: np.ndarray, z: np.ndarray, p: np.ndarray, parameters: Dict[str, float]) -> ca.MX:
     """
     Function to define the DAE system for calibration.
     """
@@ -112,7 +110,7 @@ def DAE_system_calibrating(t: float, x: np.ndarray, z: np.ndarray, p: np.ndarray
 
     return ca.vertcat(dXdt, dCdt, dNdt, dCO2dt)
 
-def simulate_model(simulation_type: str, x0: np.ndarray, parameters: Dict[str, float], 
+def simulate_model(system_data: Dict[str, any], simulation_type: str, x0: np.ndarray, parameters: Dict[str, float], 
                     time: np.ndarray, p_vars: Optional[np.ndarray] = None) -> Optional[pd.DataFrame]:
     """
     Function to simulate the DAE system.
@@ -132,10 +130,10 @@ def simulate_model(simulation_type: str, x0: np.ndarray, parameters: Dict[str, f
     if simulation_type == 'calibrating':
         param_list = system_data['calibrating_parameters']
         p = ca.MX.sym('p', len(param_list))
-        dxdt = DAE_system_calibrating(t, x, z, p, parameters, param_list)
+        dxdt = DAE_system_calibrating(system_data, t, x, z, p, parameters)
     else:
         p = ca.MX.sym('p', 0) 
-        dxdt = DAE_system(t, x, z, parameters)
+        dxdt = DAE_system(system_data, t, x, z, parameters)
 
     # Algebraic equations
 

@@ -13,3 +13,4 @@ os
 logging
 statsmodels
 mealpy
+ipykernel

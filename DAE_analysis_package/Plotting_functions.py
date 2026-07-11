@@ -36,7 +36,7 @@ def save_fig(fig: plt.Figure,
     """Save figure to the specified directory with appropriate naming."""
 
     _ensure_dir(fig_outdir)
-    if iteration is None:
+    if iteration == 'original':
         fname = f"{name}_original.png"
     elif iteration == "summary":
         fname = f"{name}_summary.png"
@@ -56,12 +56,31 @@ def figures_dir_from_csv_path(csv_path: str) -> str:
     _ensure_dir(outdir)
     return outdir
 
+def save_solution_data(solution: Dict[str, np.ndarray],
+                        time_stamps: np.ndarray,
+                        var_names: List[str],
+                        outdir: str,
+                        name: str
+                        ) -> None:
+    """
+    Save simulation solution data for external plotting.
+    """
+    _ensure_dir(outdir)
+
+    solution_df = pd.DataFrame({"t": time_stamps})
+    for var in var_names:
+        solution_df[var] = np.asarray(solution[var])
+
+    solution_df.to_csv(os.path.join(outdir, f"{name}.csv"), index=False)
+
 
 # Plotting functions
 def plot_corr_matrix(fig_outdir: str, 
                     iteration: Optional[int],
                     corr: np.ndarray, 
-                    parameters_og_list: List[str]
+                    parameters_og_list: List[str],
+                    original: bool = False,
+                    calibrated_only: bool = False
                     ) -> None:
     """
     Plots the correlation matrix of parameters.
@@ -75,19 +94,28 @@ def plot_corr_matrix(fig_outdir: str,
         vmin=-1, vmax=1, center=0, cmap='Greys',
         ax=ax
     )
-    if iteration is None:
+    if original is True:
         ax.set_title("Parameter Correlation Matrix Original Model", fontsize=16)
     else:
         ax.set_title(f"Parameter Correlation Matrix Model {iteration+1}", fontsize=16)
     fig.tight_layout()
 
-    save_fig(fig, fig_outdir, "Corr_Matrix", iteration)
+    if original:
+        corr_type = "Corr_Matrix"
+    else:
+        if calibrated_only:
+            corr_type = "Corr_Matrix_Calibrated"
+        else:
+            corr_type = "Corr_Matrix"
+
+    save_fig(fig, fig_outdir, corr_type, iteration)
 
 def plot_sensitivity_analysis(fig_outdir: str, 
                                 iteration: Optional[int],
                                 sensitivity_df: pd.DataFrame,
                                 top5_plot_df: pd.DataFrame,
                                 var_names: List[str], 
+                                original: bool = False
                                 
                                 ) -> None:
     """
@@ -95,7 +123,7 @@ def plot_sensitivity_analysis(fig_outdir: str,
     """
     palette = sns.color_palette("Greys", n_colors=sensitivity_df.shape[1])
 
-    fig = plt.figure(figsize=(14, 12), constrained_layout=True)
+    fig = plt.figure(figsize=(25, len(var_names)*5), constrained_layout=True)
     gs = gridspec.GridSpec(len(var_names), 2, width_ratios=[2, 1], figure=fig)
 
     axes_left = []
@@ -103,7 +131,7 @@ def plot_sensitivity_analysis(fig_outdir: str,
         ax = fig.add_subplot(gs[i, 0])
         ax.bar(sensitivity_df.index, sensitivity_df[state], color='gray', edgecolor='black', linewidth=1)
         ax.set_title(f"State {state}", pad=14, fontsize=14)  
-        ax.set_ylabel('Sensitivity', fontsize=14)
+        ax.set_ylabel('Sensitivity', fontsize=16)
         ax.set_xticks(range(len(sensitivity_df.index)))
         ax.set_xticklabels(sensitivity_df.index, rotation=90, ha='right')
         ax.grid(True, axis='y', linestyle='-', alpha=0.6)
@@ -112,22 +140,27 @@ def plot_sensitivity_analysis(fig_outdir: str,
     ax_right = fig.add_subplot(gs[1:-1, 1]) 
     top5_plot_df.plot(kind='barh', stacked=True, color=palette, ax=ax_right)
     ax_right.invert_yaxis()
-    ax_right.set_xlabel('Mean relative sensitivity', fontsize=14)
-    ax_right.set_title('5 most sensitive parameters', fontsize=14)
-    ax_right.legend(title='State', fontsize=14)
+    ax_right.set_xlabel('Mean relative sensitivity', fontsize=16)
+    ax_right.set_title('5 most sensitive parameters', fontsize=18)
+    ax_right.legend(title='State', fontsize=16)
+    ax_right.grid(True, alpha=0.6)
 
-    if iteration is None:
-        fig.suptitle('Parameter Sensitivities Overview Original Model', fontsize=16)
+    if original is True:
+        fig.suptitle('Parameter Sensitivities Overview Original Model', fontsize=18)
     else:
-        fig.suptitle(f'Parameter Sensitivities Overview Model {iteration+1}', fontsize=16)
+        fig.suptitle(f'Parameter Sensitivities Overview Model {iteration+1}', fontsize=18)
     # plt.subplots_adjust(hspace=0.6)  
-    plt.tight_layout(rect=[0, 0, 1, 0.96])  
+    # plt.tight_layout(rect=[0, 0, 1, 0.96])  
     
-    save_fig(fig, fig_outdir, "Sensitivity", iteration)
+    if original:
+        save_fig(fig, fig_outdir, "Sensitivity", 'original')
+    else:
+        save_fig(fig, fig_outdir, "Sensitivity", iteration)
 
 def plot_residuals_analysis(fig_outdir: str, 
-                            iteration: Optional[int],
-                            residuals: np.ndarray, 
+                            original: bool,
+                            residuals: np.ndarray,
+                            iteration: Optional[int]
                             ) -> None:
     """
     Function to plot the residuals analysis including histogram and normal probability plot.
@@ -158,22 +191,25 @@ def plot_residuals_analysis(fig_outdir: str,
     ax1.set_ylabel('Ordered Values', fontsize=14)
     ax1.grid(True)
     
-    if iteration is None:
+    if original is True:
         fig.suptitle('Residuals Analysis Original Model', fontsize=16)
     else:
         fig.suptitle(f'Residuals Analysis Model {iteration+1}', fontsize=16)
     plt.tight_layout()
 
-    save_fig(fig, fig_outdir, "Residuals_Analysis", iteration)
+    if original:
+        save_fig(fig, fig_outdir, "Residuals_Analysis", 'original')
+    else:
+        save_fig(fig, fig_outdir, "Residuals_Analysis", iteration)
 
-def plotting_comparison(system_data: Dict[str, any],
-                        simulate_model:callable,
-                        fig_outdir: str,
-                        iteration:Optional[int],
-                        parameters_updated: Dict[str, float], 
-                        AIC: float, 
-                        
-                        ) -> None:
+def plotting_single_solution(system_data: Dict[str, any],
+                            fig_outdir: str,
+                            iteration:Optional[int],
+                            parameters_updated: Dict[str, float], 
+                            AIC: float, 
+                            new_sol_v: Optional[Dict[str, np.ndarray]],
+                            original: bool,
+                            ) -> None:
     """
     Plots the comparison between the original model parameters and the updated parameters against validation data.
     Parameters:
@@ -189,64 +225,60 @@ def plotting_comparison(system_data: Dict[str, any],
     print(" ")
         
     var_names = system_data['var_names']
+    var_exp_names = system_data['var_exp_names']
     time_stamps_sim = system_data['time_stamps_sim']
     df_val = system_data['df_val']
     t_exp_v = system_data['t_exp_v']
-    x0_exp_v = system_data['x0_exp_v']
-    
-    base_parameters = system_data['base_parameters']
+    original_sol_v = system_data['original_sol_v']
 
-    base_sol = simulate_model(system_data=system_data, 
-                                simulation_type='normal',
-                                x0=x0_exp_v,
-                                parameters=base_parameters,
-                                time=time_stamps_sim)
-
-    if base_sol is None:
+    if original_sol_v is None:
         print("!!!!!!!!!!!!! Simulation with original parameters and validation data failed. Please check the parameters and initial conditions.")
         return None
 
-    if iteration is not None:
-        new_sol_v = simulate_model(system_data=system_data, 
-                                    simulation_type='normal', 
-                                    x0=x0_exp_v, 
-                                    parameters=parameters_updated, 
-                                    time=time_stamps_sim)
-        if new_sol_v is None:
-            print("!!!!!!!!!!!!! Simulation with updated parameters and validation data failed. Please check the parameters and initial conditions.")
-            return None
+    if new_sol_v is None:
+        print("!!!!!!!!!!!!! Simulation with updated parameters and validation data failed. Please check the parameters and initial conditions.")
+        return None
+
+    if original:
+        save_solution_data(solution=original_sol_v,
+                            time_stamps=time_stamps_sim,
+                            var_names=var_names,
+                            outdir=fig_outdir,
+                            name="Solution_original")
     
-    fig, axes = plt.subplots(len(var_names), 1, figsize=(14, 14))
+    fig, axes = plt.subplots(len(var_names), 1, figsize=(14, len(var_names)*4))
     fig.subplots_adjust(left=0.35, top=0.88, hspace=0.23)
 
     for i, var in enumerate(var_names):
-        axes[i].scatter(t_exp_v, df_val[var], marker='o', label=f"{var} exp validation", color='black')
-        axes[i].plot(time_stamps_sim, base_sol[var], '-', label=f"{var} base", color='black')
-        if iteration is not None:
-            axes[i].plot(time_stamps_sim, new_sol_v[var], '--', label=f"{var} new",color='black')
+        # axes[i].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
+        axes[i].plot(time_stamps_sim, original_sol_v[var], '-', label=f"{var}_original", color='black')
+        if not original:
+            axes[i].plot(time_stamps_sim, new_sol_v[var], '--', label=f"{var}_refined",color='black')
+        
         axes[i].set_xlabel("Time (h)", fontsize=14)
         axes[i].set_ylabel(var, fontsize=14)
         axes[i].legend()
         axes[i].grid(True)
+
+    for var in var_exp_names:
+        axes[var_names.index(var)].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
+
+
     # Create a text box for parameters and AIC
     textstr = "\n".join([f"{k}: {v:.4f}" for k, v in parameters_updated.items()])
 
-    fig.text(
-        0.13, 0.6, textstr,
-        ha='left', va='center', fontsize=14,        
-        bbox={'boxstyle': 'square,pad=1.0',
-            'facecolor': 'white',
-            'alpha': 0.8,
-            'edgecolor': 'none'}
-            )
+    fig.text(0.13, 0.6, textstr,
+            ha='left', va='center', fontsize=14,        
+            bbox={'boxstyle': 'square,pad=1.0',
+                'facecolor': 'white',
+                'alpha': 0.8,
+                'edgecolor': 'none'})
     if AIC == ' ':
         AIC = float('nan')
         
-    fig.text(
-        0.2, 0.4, f"AIC = {AIC:.4f}",
-        ha='center', va='top', fontsize=16,
-        fontweight='bold'
-        )
+    fig.text(0.2, 0.4, f"AIC = {AIC:.4f}",
+            ha='center', va='top', fontsize=16,
+            fontweight='bold')
 
     if iteration is None:
         title = ("Original Model vs. Validation Data")
@@ -254,24 +286,76 @@ def plotting_comparison(system_data: Dict[str, any],
         params_list = system_data['calibrating_parameters']
         title = (f"Model {iteration+1}: Fitting {params_list} vs. Validation Data")
 
-    fig.suptitle(title, fontsize=16, linespacing=2, y=0.92)
+    fig.suptitle(title, fontsize=18, linespacing=2, y=0.90)
 
-    save_fig(fig, fig_outdir, "Plotting_Comparison", iteration)
+    if original:
+        save_fig(fig, fig_outdir, "Solution", 'original')
+    else:
+        save_fig(fig, fig_outdir, "Solution", iteration)
+
+
+def solution_comparison(system_data: Dict[str, any],
+                        fig_outdir: str,
+                        model_summary_dict: Dict[str, any]) -> None:
+    """
+    Plots the comparison between the original model parameters and the updated parameters against validation data.
+    Parameters:
+        - params_list: list of parameters that are being calibrated.
+        - parameters_updated: dictionary of updated parameters for the model after calibration.
+        - AIC: Akaike Information Criterion value for the updated model.
+    """
+    var_names = system_data['var_names']
+    var_exp_names = system_data['var_exp_names']
+    time_stamps_sim = system_data['time_stamps_sim']
+    df_val = system_data['df_val']
+    t_exp_v = system_data['t_exp_v']
+    original_sol_v = system_data['original_sol_v']
+    
+    fig, axes = plt.subplots(len(var_names), 1, figsize=(14, len(var_names)*4))
+    fig.subplots_adjust(left=0.35, top=0.88, hspace=0.23)
+
+    n_iterations = len(model_summary_dict['Solution'])
+    palette_set2 = sns.color_palette("Set2", n_colors=n_iterations)
+
+    for i, var in enumerate(var_names):
+        # axes[i].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
+        axes[i].plot(time_stamps_sim, original_sol_v[var], '-', label=f"{var}_og", color='black')
+
+        for iteration in range(len(model_summary_dict['Solution'])):
+            new_sol_v = model_summary_dict['Solution'][iteration]
+            model = model_summary_dict['Model'][iteration]
+            axes[i].plot(time_stamps_sim, new_sol_v[var], '--', label=f"{model}",color=palette_set2[iteration])
+            
+        axes[i].set_xlabel("Time (h)", fontsize=14)
+        axes[i].set_ylabel(var, fontsize=14)
+        axes[i].legend()
+        axes[i].grid(True)
+    for var in var_exp_names:
+        axes[var_names.index(var)].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
+
+    title = ("All Models vs. Validation Data")
+
+    fig.suptitle(title, fontsize=18, linespacing=2, y=0.90)
+
+    save_fig(fig, fig_outdir, "Solution", "summary")
 
 
 # Summary Plotting functions
 def plot_sensitivity_summary(fig_outdir: str, 
-                            sensitivity_df_all: list
+                            model_summary_dict: Dict[str, any],
                             ) -> None:
     """Plot sensitivity analysis results for all iterations with mean and std deviation."""
-    stacked_sens = np.stack([df.values for df in sensitivity_df_all], axis=0)
+    
+    sensitivity_df_all = model_summary_dict['Sensitivity']
+
+    stacked_sens = np.stack([df.values for df in sensitivity_df_all if df is not None and not df.empty], axis=0)
     mean_sens = stacked_sens.mean(axis=0)
     std_sens  = stacked_sens.std(axis=0)
 
     params = sensitivity_df_all[0].index.tolist()
     states = sensitivity_df_all[0].columns.tolist()
 
-    fig, axes = plt.subplots(len(states), 1, figsize=(8, 2*len(states)), sharex=True)
+    fig, axes = plt.subplots(len(states), 1, figsize=(10, 3*len(states)), sharex=True)
 
     for j, state in enumerate(states):
         axes[j].bar(params,
@@ -290,9 +374,13 @@ def plot_sensitivity_summary(fig_outdir: str,
     save_fig(fig, fig_outdir, "Sensitivity", "summary")
 
 def plot_residuals_summary(fig_outdir: str, 
-                            residuals_all: list
+                            model_summary_dict: Dict[str, any]
                             ) -> None:
     """Plot aggregated residuals analysis for all iterations with mean and std deviation."""
+    residuals_all = model_summary_dict['Residuals']
+    if residuals_all is None or len(residuals_all) == 0:
+        print("No residuals data available for summary plot.")
+        return None
     all_res    = np.concatenate(residuals_all)
     mu_all, std_all = stats.norm.fit(all_res)
 
@@ -338,13 +426,20 @@ def plot_residuals_summary(fig_outdir: str,
 
     save_fig(fig, fig_outdir, "Residuals_Analysis", "summary")
 
-def plot_corr_summary(fig_outdir: str, 
-                        corr_stack: np.ndarray, 
-                        mean_corr: np.ndarray, 
-                        parameters_og_list: list
+def plot_corr_summary(system_data: Dict[str, any],
+                        fig_outdir: str,
+                        model_summary_dict: Dict[str, any],
                         ) -> None:
     """Plot aggregated correlation matrix for all iterations with mean and std deviation."""
     
+    parameters_og_list = system_data['parameters_og_list']
+    correlation_matrix_all = model_summary_dict['Correlation']
+    if correlation_matrix_all is None or len(correlation_matrix_all) == 0:
+        print("No correlation data available for summary plot.")
+        return None
+
+    corr_stack = np.stack(correlation_matrix_all, axis=0)
+    mean_corr  = corr_stack.mean(axis=0)
     std_corr   = corr_stack.std(axis=0)
     n      = mean_corr.shape[0]
     annot  = np.empty((n, n), dtype=object)
