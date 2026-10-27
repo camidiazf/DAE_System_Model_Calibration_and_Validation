@@ -25,3 +25,8 @@ Paper_results/
 # Claude working folders
 Experiments_and_package/Claude outputs/
 Experiments_and_package/Claude_paper_draft/
+
+# Large result folders kept local only
+IEEE ICA-ACCA 2025 article/Paper_results_2025/
+Experiments_and_package/M_smegmatis_extended_modified/M_smegmatis_extended_modified_Results/*
+!Experiments_and_package/M_smegmatis_extended_modified/M_smegmatis_extended_modified_Results/seventh_run_0/
