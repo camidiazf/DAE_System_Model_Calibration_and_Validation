@@ -2,8 +2,7 @@
 
 Python framework to **calibrate (PSO), validate and diagnose (FIM, t-values, correlations, information criteria)** DAE bioprocess models against time-series data. It was developed for *Mycobacterium smegmatis* batch cultivation on glycerol and ammonium and is used for the conference paper *"A Droop Quota DAE Model for Mycobacterium smegmatis Batch Cultivation Under Nutrient-Replete and Nitrogen-Limited Conditions"* and its Supplementary Material.
 
-Two models are included: a **baseline** (Monod, Díaz-Figueroa et al. 2025) and an **extended** model (baseline + internal nitrogen quota, self-inhibition exponent, biomass-dependent maintenance, ammonium in the charge balance). See [What changed](CHANGELOG_final_vs_repo.md) for the differences with the previous version of this repository.
-
+Two models are included: a **baseline** (Monod, Díaz-Figueroa et al. 2025) and an **extended** model (baseline + internal nitrogen quota, self-inhibition exponent, biomass-dependent maintenance, ammonium in the charge balance).
 ## 0. Repository layout and quick start
 
 ```
