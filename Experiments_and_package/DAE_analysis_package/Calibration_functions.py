@@ -38,38 +38,74 @@ def suppress_all_output():
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
+# =====================================================================================
+# CHANGELOG vs. the previous version  (search for "[NEW]" / "[FIX]")
+#  [NEW] Seed: every PSO run gets an explicit seed (mealpy solve(..., seed=)), returned and logged in the CSV -> reproducible.
+#        Optional: system_data['pso_seed_base'] makes seeds deterministic (see RUN_functions).
+#  [NEW] The final value of the PSO objective ('COST', native-units SSE on the calibration set) and the best-so-far curve
+#        per epoch ('HISTORY') are returned. Before, nothing about the calibration fit was kept: the CSV only had validation metrics.
+#  [FIX] Bound hits: the old flags had inverted logic and their prints were commented out; the absolute tolerance 1e-3 meant
+#        different things for q_max (0.098) and t_lag (19.5). Now: parameter within 1% of the (ub-lb) width of a bound -> listed in 'BOUND_HITS'.
+#  [FIX] 'except:' in the cost function swallowed everything (even KeyboardInterrupt) and returned 1e6 silently.
+#        Now 'except Exception' and the number of failed evaluations is counted ('N_FAILED_EVALS').
+#  [NEW] Optional system_data['pso_epoch'] / ['pso_pop_size'] (defaults 100 / 50 = unchanged) for quick tests.
+#  The cost function itself is UNCHANGED (unweighted SSE in native units).
+# =====================================================================================
+
+def get_pso_settings(system_data: Dict[str, any]) -> Dict[str, Any]:
+    """
+    PSO settings actually used by RUN_PSO_CALIBRATION (single source of truth; also stored in campaign.json).
+    NOTE: the defaults are epoch=50, pop_size=30. The changelog above and the paper speak of 100 / 50: if that is what
+    you want, set system_data['pso_epoch'] = 100 and system_data['pso_pop_size'] = 50 explicitly.
+    """
+    return {'epoch': int(system_data.get('pso_epoch', 50)), 'pop_size': int(system_data.get('pso_pop_size', 30)),
+            'c1': 1.5, 'c2': 1.5, 'w': 0.5}
+
+
 def RUN_PSO_CALIBRATION(system_data: Dict[str, any],
                         simulate_model:callable,
                         iteration: int, 
                         lb: List[float], 
-                        ub: List[float], 
+                        ub: List[float],
+                        ext: str,
+                        seed: Optional[int] = None,
                         ) -> Dict[str, Any]:
     """
     Run PSO optimization for parameter calibration.
     """
     params_list = system_data['calibrating_parameters']
-    print(f">>> Running PSO calibration iteration {iteration + 1}...")
     # Define the optimization problem
+    cost_function = define_cost_function(system_data=system_data, simulate_model=simulate_model, ext=ext)
     problem = {
-    "obj_func": define_cost_function(system_data=system_data, simulate_model=simulate_model),
+    "obj_func": cost_function,
     "bounds": FloatVar(lb=lb, ub=ub),
     "minmax": "min"
     }
 
     # Initialize PSO optimizer (you can adjust parameters as needed)
-    pso = PSO.OriginalPSO(epoch=100, pop_size=50, c1=1.5, c2=1.5, w=0.5)
+    pso_cfg = get_pso_settings(system_data)
+    pso = PSO.OriginalPSO(epoch=pso_cfg['epoch'], pop_size=pso_cfg['pop_size'],
+                          c1=pso_cfg['c1'], c2=pso_cfg['c2'], w=pso_cfg['w'])
+
+    # [NEW] explicit seed, always recorded
+    if seed is None:
+        seed = int(np.random.SeedSequence().entropy % (2**31 - 1))
     
     # Solve the optimization problem, suppressing output, and measure time taken
     start = time.perf_counter()
     with suppress_all_output():
-        g_best = pso.solve(problem)
+        g_best = pso.solve(problem, seed=seed)
     end = time.perf_counter()
+    # [NEW] fail loudly if the objective never worked (this is how the parameters_og_list bug went unnoticed)
+    st = cost_function.stats
+    if st['n_eval'] > 0 and st['n_failed'] == st['n_eval']:
+        raise RuntimeError(f"All {st['n_eval']} PSO objective evaluations failed. First error: {st.get('first_error')}")
+    if st['n_failed'] > 0.5 * st['n_eval']:
+        logger.warning("More than half of the PSO evaluations failed (%d/%d). First error: %s",
+                       st['n_failed'], st['n_eval'], st.get('first_error'))
+    cost_final = float(g_best.target.fitness)                         # [NEW] final PSO objective (calibration SSE, native units)
+    history = [float(v) for v in pso.history.list_global_best_fit]    # [NEW] best-so-far objective per epoch (convergence check)
     
-    print("Optimization Results:")
-    print("     Best Solutions: ", g_best.solution)
-    print("     Minimum Error: ", g_best.target.fitness)
-    print(f"     Optimization Time: {end - start:.2f} s")
-
     # Update parameters with optimized values
     new_params = g_best.solution
     new_params_dict = dict(zip(params_list, new_params))
@@ -78,7 +114,6 @@ def RUN_PSO_CALIBRATION(system_data: Dict[str, any],
     refined_parameters = original_params.copy()
     parameters_values = []
     
-    i_param = 0
     for param in original_params.keys():
         if param not in params_list:
             refined_parameters[param] = original_params[param]
@@ -87,35 +122,30 @@ def RUN_PSO_CALIBRATION(system_data: Dict[str, any],
             new_value = new_params_dict[param]
             refined_parameters[param] = new_value
             parameters_values.append(new_value)
-            upper_limit = True
-            lower_limit = True
-            # Check if the new parameter value is at limit of given bounds
-            if abs((abs(new_value) - abs(ub[i_param]))) < 1e-3:
-                # print(f"!!!       Warning: Parameter '{param}' reached its upper limit ({ub[i_param]}).")
-                upper_limit = False
-            if abs((abs(new_value) - abs(lb[i_param]))) < 1e-3:
-                # print(f"!!!       Warning: Parameter '{param}' reached its lower limit ({lb[i_param]}).")                
-                lower_limit = False
-            if upper_limit and lower_limit:
-                pass
-                # print(f"Parameter '{param}' is between the limits ({lb[i_param]}, {ub[i_param]}).")
-            i_param += 1
 
-        parameters_values_formatted = [format_number(x) for x in parameters_values]
+    parameters_values_formatted = [format_number(x) for x in parameters_values]
+
+    # [FIX] bound hits: within 1% of the bound-interval width of lb or ub (scale-free)
+    bound_hits = []
+    for p, l, u in zip(params_list, lb, ub):
+        v = new_params_dict[p]
+        if u > l and (abs(v - l) <= 0.01 * (u - l) or abs(v - u) <= 0.01 * (u - l)):
+            bound_hits.append(p)
     
-    print("\nNew Parameters after PSO Calibration:")
     df_new_params = pd.DataFrame({
         "Parameter      ": params_list,
         "Original / Base": [original_params[key] for key in params_list],
         "New"            : [refined_parameters[key] for key in params_list]})
-    print(df_new_params)
-    print(" ")
 
-    return {'RESULTS':refined_parameters, 'FORMATTED_VALUES': parameters_values_formatted}
+    return {'RESULTS':refined_parameters, 'FORMATTED_VALUES': parameters_values_formatted,
+            'COST': cost_final, 'SEED': seed, 'HISTORY': history, 'BOUND_HITS': bound_hits,
+            'N_FAILED_EVALS': cost_function.stats['n_failed'], 'N_EVALS': cost_function.stats['n_eval'],
+            'TIME_S': end - start}
 
 
 def define_cost_function(system_data: Dict[str, any],
                         simulate_model:callable,
+                        ext: str
                         ) -> callable:
     """
     Function to define the cost function for calibration using experimental data.
@@ -125,14 +155,30 @@ def define_cost_function(system_data: Dict[str, any],
         - cost_function: function that computes the cost based on the difference between simulated and experimental data.
     """
     # Load system information
+
+    # SE CALIBRA A PARTIR DEL N DEF !!!!!!!!!!!!!!!!!!!!!!!
+
+
     var__exp_names = system_data['var_exp_names']
-    x0_exp = system_data['x0_exp']
+    x0_exp = system_data['x0_exp'+ext]
 
-    t_exp = system_data['t_exp']
-    df_exp = system_data['df_exp']
+    t_exp = system_data['t_exp'+ext]
+    df_exp = system_data['df_exp'+ext]
 
-    base_parameters = system_data['parameters_og_list']
+    # [FIX] was system_data['parameters_og_list'], which is a LIST of parameter names. simulate_model then did
+    #       pars[name] = p[i] on a list -> TypeError on every call, swallowed below -> every cost was 1e6 (N_failed_evals = N_evals).
+    base_parameters = system_data['parameters']
 
+    # [NEW] cost scaling. 'native' = old behaviour (unweighted SSE in native units: C in g/L dominates, N and pH are ~ignored).
+    #       'range'  = every variable divided by the range of its experimental data (same scaling as the NRMSE / AIC metrics).
+    cost_scaling = system_data.get('cost_scaling', 'native')
+    scale = {}
+    for v in var__exp_names:
+        rng = float(np.ptp(np.asarray(df_exp[v].values, dtype=float))) if cost_scaling == 'range' else 1.0
+        scale[v] = rng if rng > 0 else 1.0
+
+
+    stats = {'n_eval': 0, 'n_failed': 0}      # [NEW] counters
 
     def cost_function(p_vars: np.ndarray) -> float: # COST FUNCTION USING PE DATA
         """
@@ -142,6 +188,7 @@ def define_cost_function(system_data: Dict[str, any],
         Returns:
             - err: total error between simulated and experimental data
         """
+        stats['n_eval'] += 1
         try:
             df_results = simulate_model(system_data=system_data, 
                                         simulation_type='calibrating', 
@@ -156,12 +203,15 @@ def define_cost_function(system_data: Dict[str, any],
                 var_new = df_results[var]
                 var_exp = df_exp[var]
 
-                err += np.sum((var_new - var_exp)**2)
+                err += np.sum(((np.asarray(var_new, dtype=float) - np.asarray(var_exp, dtype=float)) / scale[var])**2)
         
             return err
         
-        except:
+        except Exception as exc:               # [FIX] was a bare 'except:'
+            stats['n_failed'] += 1
+            stats.setdefault('first_error', repr(exc))   # [NEW] keep the first exception so a systematic failure is visible
             err = 1e6
             return err
-        
+
+    cost_function.stats = stats            # [NEW] read by RUN_PSO_CALIBRATION
     return cost_function

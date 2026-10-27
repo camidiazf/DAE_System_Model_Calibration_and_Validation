@@ -1,0 +1,2 @@
+rank,model,param_combo,rank_score_NRMSE,Cal_NRMSE_normal,Val_NRMSE_normal,Cal_NRMSE_N_def,Val_NRMSE_N_def,YX_N,Xmax,mu_max
+1,M1_1,"['YX_N', 'Xmax', 'mu_max']",0.4122714446,0.1849437533,0.1230924448,0.4740010443,0.4122714446,10.5,1.1537,0.1335

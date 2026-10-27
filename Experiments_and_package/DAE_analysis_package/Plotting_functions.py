@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Sequence, Any
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,458 +8,485 @@ import matplotlib.gridspec as gridspec
 import seaborn as sns
 import scipy.stats as stats
 
+from DAE_analysis_package.Results_store import CONDITIONS, DATASETS, DATASET_LABEL, dataset_label, condition_label
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
 
 """
 Module containing plotting and saving functions for DAE system model calibration and validation.
+
+[STORE] Figures are no longer named by 'iteration+1' (which silently overwrote when the same name was reused). The caller
+(RUN_functions) gives a folder (runs/<run_id>/figures/<condition>/) and every function takes a `filename`/`title`.
+plotting_single_solution now draws CALIBRATION | VALIDATION side by side (rows = states).
 """
 
-# Global functions to be used across plotting functions
-def _iter_index(iteration: Optional[int]) -> int:
-    """Map None -> 0 (original), otherwise i -> i+1.
-    Function to handle iteration indexing for plotting and saving figures.
-    """
+CAL_COLOR = "#00348d"       # calibrated model
+ORIG_COLOR = "black"        # original model
 
-    return 0 if iteration is None else int(iteration) + 1
 
+# ----------------------------------------------------------------------------------------------
+# Saving helpers
+# ----------------------------------------------------------------------------------------------
 def _ensure_dir(path: str) -> None:
     """Ensure the directory exists."""
-
     os.makedirs(path, exist_ok=True)
 
-def save_fig(fig: plt.Figure, 
-            fig_outdir: str, 
-            name: str, 
-            iteration: Optional[int] = None
-            ) -> None:
-    """Save figure to the specified directory with appropriate naming."""
 
+def save_fig_file(fig: plt.Figure, fig_outdir: str, filename: str, dpi: int = 200) -> str:
+    """Save a figure as <fig_outdir>/<filename> and close it (Jupyter does not show it twice)."""
     _ensure_dir(fig_outdir)
+    path = os.path.join(fig_outdir, filename)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+# --- legacy helpers (kept so old notebooks importing them do not break) ---
+def _iter_index(iteration: Optional[int]) -> int:
+    """Map None -> 0 (original), otherwise i -> i+1."""
+    return 0 if iteration is None else int(iteration) + 1
+
+
+def save_fig(fig: plt.Figure, fig_outdir: str, name: str, iteration: Optional[int] = None) -> None:
+    """LEGACY naming (name_<iteration+1>.png). New code uses save_fig_file."""
     if iteration == 'original':
         fname = f"{name}_original.png"
     elif iteration == "summary":
         fname = f"{name}_summary.png"
     else:
         fname = f"{name}_{iteration+1}.png"
+    save_fig_file(fig, fig_outdir, fname)
 
-    fig.savefig(os.path.join(fig_outdir, fname), dpi=200, bbox_inches="tight")
-    fig.canvas.draw_idle()
-    # plt.show()
-    plt.close(fig)   # Jupyter will close images and not show them at the end of the code
 
 def figures_dir_from_csv_path(csv_path: str) -> str:
-    """
-    Generate a directory path for saving figures based on the CSV file path and ensure it exists.
-    """
+    """LEGACY: figures folder next to a CSV."""
     outdir = os.path.join(os.path.dirname(csv_path), "Figures")
     _ensure_dir(outdir)
     return outdir
 
-def save_solution_data(solution: Dict[str, np.ndarray],
-                        time_stamps: np.ndarray,
-                        var_names: List[str],
-                        outdir: str,
-                        name: str
-                        ) -> None:
-    """
-    Save simulation solution data for external plotting.
-    """
-    _ensure_dir(outdir)
 
+def save_solution_data(solution: Dict[str, np.ndarray], time_stamps: np.ndarray, var_names: List[str],
+                       outdir: str, name: str) -> None:
+    """Save simulation solution data for external plotting."""
+    _ensure_dir(outdir)
     solution_df = pd.DataFrame({"t": time_stamps})
     for var in var_names:
         solution_df[var] = np.asarray(solution[var])
-
     solution_df.to_csv(os.path.join(outdir, f"{name}.csv"), index=False)
 
 
-# Plotting functions
-def plot_corr_matrix(fig_outdir: str, 
-                    iteration: Optional[int],
-                    corr: np.ndarray, 
-                    parameters_og_list: List[str],
-                    original: bool = False,
-                    calibrated_only: bool = False
-                    ) -> None:
+# ----------------------------------------------------------------------------------------------
+# Experiment helpers shared by the single-solution and comparison figures
+# ----------------------------------------------------------------------------------------------
+def experiment_data(system_data: Dict[str, Any], condition: str, dataset: str):
+    """(t_exp, DataFrame) of the calibration ('cal') or validation ('val') experiment of a condition."""
+    ext = '_' + condition
+    if dataset == 'cal':
+        return np.asarray(system_data['t_exp' + ext], dtype=float), system_data['df_exp' + ext]
+    return np.asarray(system_data['t_exp_v' + ext], dtype=float), system_data['df_val' + ext]
+
+
+def dataset_xmax(system_data: Dict[str, Any], condition: str, dataset: str) -> float:
     """
-    Plots the correlation matrix of parameters.
+    Upper x limit (h) of a dataset's panels: system_data['xmax'] = {'cal': 50, 'val': 100} if given, otherwise the last
+    experimental time rounded up to a multiple of 10 h (5 h below 40 h).
     """
+    cfg = system_data.get('xmax')
+    if isinstance(cfg, dict) and cfg.get(dataset):
+        return float(cfg[dataset])
+    t_exp, _ = experiment_data(system_data, condition, dataset)
+    tmax = float(np.max(t_exp))
+    step = 10.0 if tmax > 40 else 5.0
+    return float(np.ceil(tmax / step) * step)
+
+
+def _fmt(v, spec: str) -> str:
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return 'n/a'
+    return format(v, spec) if np.isfinite(v) else 'n/a'
+
+
+def _metric_line(m: Optional[Dict[str, Any]]) -> str:
+    if not m:
+        return ''
+    return f"global NRMSE = {_fmt(m.get('NRMSE'), '.3f')} | AIC = {_fmt(m.get('AIC'), '.1f')} | BIC = {_fmt(m.get('BIC'), '.1f')}"
+
+
+def _params_text(params: Dict[str, float], calibrated: Sequence[str]) -> str:
+    def line(k):
+        try:
+            return f"{k:<10s}{float(params[k]):>11.4g}"
+        except (TypeError, ValueError):
+            return f"{k:<10s}{str(params[k]):>11s}"
+    cal = [line(k) for k in params if k in calibrated]
+    fix = [line(k) for k in params if k not in calibrated]
+    out = []
+    if cal:
+        out += ["CALIBRATED"] + cal + [""]
+    out += ["FIXED" if cal else "PARAMETERS"] + fix
+    return "\n".join(out)
+
+
+def _shared_legend(fig, axes, ncol: int = 6, y: float = 0.0) -> None:
+    handles = {}
+    ax_iter = axes if isinstance(axes, (list, tuple)) else np.ravel(axes)
+    for ax in ax_iter:
+        for h, l in zip(*ax.get_legend_handles_labels()):
+            handles.setdefault(l, h)
+    if handles:
+        fig.legend(list(handles.values()), list(handles.keys()), loc='lower center', ncol=min(len(handles), ncol),
+                   frameon=False, fontsize=10, bbox_to_anchor=(0.5, y))
+
+
+# ----------------------------------------------------------------------------------------------
+# One run, one condition
+# ----------------------------------------------------------------------------------------------
+def plotting_single_solution(system_data: Dict[str, Any],
+                             fig_outdir: str,
+                             condition: str,
+                             label: str,
+                             parameters_updated: Dict[str, float],
+                             sols: Dict[str, Any],
+                             originals: Optional[Dict[str, Any]],
+                             metrics: Optional[Dict[str, Dict[str, float]]],
+                             original: bool = False,
+                             calibration_condition: str = 'N_def',
+                             filename: str = 'solution.png') -> Optional[str]:
+    """
+    One run, one condition: rows = states, columns = CALIBRATION | VALIDATION experiment.
+        sols      : {'cal': DataFrame|None, 'val': DataFrame|None}  trajectories on time_stamps_sim (calibrated model)
+        originals : same structure for the original (un-calibrated) model, or None
+        metrics   : {'cal': {'NRMSE','AIC','BIC'}, 'val': {...}}  shown in the column titles
+    The calibration column of the condition the PSO was fitted on is marked '[fitted]'; the other condition's calibration
+    column is data the parameters were NOT fitted to ('[not fitted]').
+    """
+    var_names = list(system_data['var_names'])
+    var_exp = list(system_data['var_exp_names'])
+    t = np.asarray(system_data['time_stamps_sim'], dtype=float)
+    calibrated = [] if original else list(system_data.get('calibrating_parameters') or [])
+    n = len(var_names)
+
+    fig = plt.figure(figsize=(17, 2.5 * n + 1.6))
+    gs = gridspec.GridSpec(n, 3, width_ratios=[0.8, 2, 2], figure=fig, wspace=0.25, hspace=0.42,
+                           left=0.02, right=0.99, top=0.88, bottom=0.10)
+    ax_txt = fig.add_subplot(gs[:, 0])
+    ax_txt.axis('off')
+    ax_txt.text(0.0, 1.0, _params_text(parameters_updated, calibrated), ha='left', va='top', fontsize=8.5,
+                family='monospace', transform=ax_txt.transAxes)
+
+    axes = []
+    for j, ds in enumerate(DATASETS):
+        t_exp, df_exp = experiment_data(system_data, condition, ds)
+        xmax = dataset_xmax(system_data, condition, ds)
+        mk = t <= xmax
+        me = t_exp <= xmax
+        for i, var in enumerate(var_names):
+            ax = fig.add_subplot(gs[i, j + 1])
+            axes.append(ax)
+            o = (originals or {}).get(ds)
+            if o is not None and var in o:
+                ax.plot(t[mk], np.asarray(o[var])[mk], 'k-' if original else 'k--', lw=1.5, label='Original model', zorder=3)
+            s = (sols or {}).get(ds)
+            if (not original) and s is not None and var in s:
+                ax.plot(t[mk], np.asarray(s[var])[mk], '-', color=CAL_COLOR, lw=2.0, label='Calibrated model', zorder=4)
+            if var in var_exp:
+                ax.scatter(t_exp[me], np.asarray(df_exp[var])[me], c='k', marker='o', s=22, label='Experimental data', zorder=5)
+            ax.set_xlim(0, xmax)
+            ax.grid(True, alpha=0.4)
+            if j == 0:
+                ax.set_ylabel(var, fontsize=12)
+            if i == n - 1:
+                ax.set_xlabel('Time (h)', fontsize=12)
+            if i == 0:
+                tag = ''
+                if ds == 'cal' and not original:
+                    tag = ' [fitted]' if condition == calibration_condition else ' [not fitted]'
+                ax.set_title(f"{DATASET_LABEL[ds]}: {dataset_label(system_data, condition, ds)}{tag}\n"
+                             f"{_metric_line((metrics or {}).get(ds))}", fontsize=11)
+
+    _shared_legend(fig, axes, ncol=3, y=0.01)
+    what = 'Original model' if original else (f"Calibrated model {label}" if label else 'Calibrated model')
+    if calibrated:
+        what += f" (fitted: {', '.join(calibrated)})"
+    fig.suptitle(f"{what} - {condition_label(system_data, condition)}", fontsize=15, y=0.97)
+    return save_fig_file(fig, fig_outdir, filename)
+
+
+# ----------------------------------------------------------------------------------------------
+# Parameter analysis / residuals (one run, one condition)
+# ----------------------------------------------------------------------------------------------
+def plot_corr_matrix(fig_outdir: str, corr: np.ndarray, parameters_og_list: List[str], title: str,
+                     filename: str = 'corr_matrix.png') -> None:
+    """Heatmap of the parameter correlation matrix (determinability) of the analysed parameters."""
     mask = np.isnan(corr)
-    fig, ax = plt.subplots(figsize=(14, 10))
-    sns.heatmap(
-        corr, mask=mask,
-        xticklabels=parameters_og_list, yticklabels=parameters_og_list,
-        annot=True, fmt=".3f",
-        vmin=-1, vmax=1, center=0, cmap='Greys',
-        ax=ax
-    )
-    if original is True:
-        ax.set_title("Parameter Correlation Matrix Original Model", fontsize=16)
-    else:
-        ax.set_title(f"Parameter Correlation Matrix Model {iteration+1}", fontsize=16)
+    side = max(6.0, 0.9 * len(parameters_og_list) + 3.0)
+    fig, ax = plt.subplots(figsize=(side * 1.2, side))
+    sns.heatmap(corr, mask=mask, xticklabels=parameters_og_list, yticklabels=parameters_og_list,
+                annot=True, fmt=".3f", vmin=-1, vmax=1, center=0, cmap='Greys', ax=ax)
+    ax.set_title(title, fontsize=14)
     fig.tight_layout()
+    save_fig_file(fig, fig_outdir, filename)
 
-    if original:
-        corr_type = "Corr_Matrix"
-    else:
-        if calibrated_only:
-            corr_type = "Corr_Matrix_Calibrated"
-        else:
-            corr_type = "Corr_Matrix"
 
-    save_fig(fig, fig_outdir, corr_type, iteration)
-
-def plot_sensitivity_analysis(fig_outdir: str, 
-                                iteration: Optional[int],
-                                sensitivity_df: pd.DataFrame,
-                                top5_plot_df: pd.DataFrame,
-                                var_names: List[str], 
-                                original: bool = False
-                                
-                                ) -> None:
-    """
-    Plots the sensitivity analysis results for all states and highlights the top 5 most sensitive parameters.
-    """
+def plot_sensitivity_analysis(fig_outdir: str, sensitivity_df: pd.DataFrame, top5_plot_df: pd.DataFrame,
+                              var_names: List[str], title: str, filename: str = 'sensitivity.png') -> None:
+    """Sensitivity of every measured state to every parameter + the 5 most sensitive parameters."""
     palette = sns.color_palette("Greys", n_colors=sensitivity_df.shape[1])
 
-    fig = plt.figure(figsize=(25, len(var_names)*5), constrained_layout=True)
+    fig = plt.figure(figsize=(25, len(var_names) * 5), constrained_layout=True)
     gs = gridspec.GridSpec(len(var_names), 2, width_ratios=[2, 1], figure=fig)
 
-    axes_left = []
     for i, state in enumerate(sensitivity_df.columns):
         ax = fig.add_subplot(gs[i, 0])
         ax.bar(sensitivity_df.index, sensitivity_df[state], color='gray', edgecolor='black', linewidth=1)
-        ax.set_title(f"State {state}", pad=14, fontsize=14)  
-        ax.set_ylabel('Sensitivity', fontsize=16)
+        ax.set_title(f"State {state}", pad=14, fontsize=14)
+        ax.set_ylabel('General relative sensitivity (-)', fontsize=16)
+        ax.axhline(0.01, color='black', linestyle='--', linewidth=1)    # non-sensitive threshold (slides)
         ax.set_xticks(range(len(sensitivity_df.index)))
         ax.set_xticklabels(sensitivity_df.index, rotation=90, ha='right')
         ax.grid(True, axis='y', linestyle='-', alpha=0.6)
-        axes_left.append(ax)
-    
-    ax_right = fig.add_subplot(gs[1:-1, 1]) 
+
+    rows = slice(1, -1) if len(var_names) > 2 else slice(None)        # [FIX] gs[1:-1] is empty with <= 2 states
+    ax_right = fig.add_subplot(gs[rows, 1])
     top5_plot_df.plot(kind='barh', stacked=True, color=palette, ax=ax_right)
     ax_right.invert_yaxis()
-    ax_right.set_xlabel('Mean relative sensitivity', fontsize=16)
+    ax_right.set_xlabel('General relative sensitivity, sum over variables (-)', fontsize=16)
     ax_right.set_title('5 most sensitive parameters', fontsize=18)
     ax_right.legend(title='State', fontsize=16)
     ax_right.grid(True, alpha=0.6)
 
-    if original is True:
-        fig.suptitle('Parameter Sensitivities Overview Original Model', fontsize=18)
-    else:
-        fig.suptitle(f'Parameter Sensitivities Overview Model {iteration+1}', fontsize=18)
-    # plt.subplots_adjust(hspace=0.6)  
-    # plt.tight_layout(rect=[0, 0, 1, 0.96])  
-    
-    if original:
-        save_fig(fig, fig_outdir, "Sensitivity", 'original')
-    else:
-        save_fig(fig, fig_outdir, "Sensitivity", iteration)
+    fig.suptitle(title, fontsize=18)
+    save_fig_file(fig, fig_outdir, filename)
 
-def plot_residuals_analysis(fig_outdir: str, 
-                            original: bool,
-                            residuals: np.ndarray,
-                            iteration: Optional[int]
-                            ) -> None:
-    """
-    Function to plot the residuals analysis including histogram and normal probability plot.
-    """
+
+def plot_residuals_analysis(fig_outdir: str, residuals: np.ndarray, title: str,
+                            filename: str = 'residuals.png') -> None:
+    """Histogram of the (range-scaled, pooled) residuals with normal fit + normal probability plot."""
+    residuals = np.asarray(residuals, dtype=float)
     fig, axes = plt.subplots(1, 2, figsize=(14, 7))
 
-    # Histogram of residuals and normal distribution fit
     ax0 = axes[0]
-    n, bins, patches = ax0.hist(residuals, bins='auto', density=True, alpha=0.6, color='gray', edgecolor='black')
+    ax0.hist(residuals, bins='auto', density=True, alpha=0.6, color='gray', edgecolor='black')
     mu, std = stats.norm.fit(residuals)
     xmin, xmax = ax0.get_xlim()
     x = np.linspace(xmin, xmax, 100)
-    p = stats.norm.pdf(x, mu, std)
-    ax0.plot(x, p, 'k', linewidth=2)
-    ax0.set_xlabel('Residuals', fontsize=14)
+    ax0.plot(x, stats.norm.pdf(x, mu, std), 'k', linewidth=2)
+    ax0.set_xlabel('Residuals (range-scaled)', fontsize=14)
     ax0.set_ylabel('Density distribution', fontsize=14)
     ax0.set_title('Histogram of Residuals\nand Normal Distribution', fontsize=16)
     ax0.grid(True)
 
-    # Normal Probability Plot 
     ax1 = axes[1]
-    osm, osr = stats.probplot(residuals, dist="norm")[0]   # ordered stats
-    slope, intercept, r = stats.probplot(residuals, dist="norm")[1]
+    (osm, osr), (slope, intercept, _r) = stats.probplot(residuals, dist="norm")
     ax1.scatter(osm, osr, color='gray', edgecolor='black')
-    ax1.plot(osm, slope*osm + intercept, color='black', linewidth=2)
+    ax1.plot(osm, slope * osm + intercept, color='black', linewidth=2)
     ax1.set_title('Normal Probability Plot', fontsize=16)
     ax1.set_xlabel('Theoretical Quantiles', fontsize=14)
     ax1.set_ylabel('Ordered Values', fontsize=14)
     ax1.grid(True)
-    
-    if original is True:
-        fig.suptitle('Residuals Analysis Original Model', fontsize=16)
-    else:
-        fig.suptitle(f'Residuals Analysis Model {iteration+1}', fontsize=16)
-    plt.tight_layout()
 
-    if original:
-        save_fig(fig, fig_outdir, "Residuals_Analysis", 'original')
-    else:
-        save_fig(fig, fig_outdir, "Residuals_Analysis", iteration)
-
-def plotting_single_solution(system_data: Dict[str, any],
-                            fig_outdir: str,
-                            iteration:Optional[int],
-                            parameters_updated: Dict[str, float], 
-                            AIC: float, 
-                            new_sol_v: Optional[Dict[str, np.ndarray]],
-                            original: bool,
-                            ) -> None:
-    """
-    Plots the comparison between the original model parameters and the updated parameters against validation data.
-    Parameters:
-        - params_list: list of parameters that are being calibrated.
-        - parameters_updated: dictionary of updated parameters for the model after calibration.
-        - AIC: Akaike Information Criterion value for the updated model.
-    """
-
-    print(" ")
-    print("---------------------------------------------------------------------------------")
-    print("---------------------- MODEL COMPARISON TO VALIDATION DATA ----------------------")
-    print("---------------------------------------------------------------------------------")
-    print(" ")
-        
-    var_names = system_data['var_names']
-    var_exp_names = system_data['var_exp_names']
-    time_stamps_sim = system_data['time_stamps_sim']
-    df_val = system_data['df_val']
-    t_exp_v = system_data['t_exp_v']
-    original_sol_v = system_data['original_sol_v']
-
-    if original_sol_v is None:
-        print("!!!!!!!!!!!!! Simulation with original parameters and validation data failed. Please check the parameters and initial conditions.")
-        return None
-
-    if new_sol_v is None:
-        print("!!!!!!!!!!!!! Simulation with updated parameters and validation data failed. Please check the parameters and initial conditions.")
-        return None
-
-    if original:
-        save_solution_data(solution=original_sol_v,
-                            time_stamps=time_stamps_sim,
-                            var_names=var_names,
-                            outdir=fig_outdir,
-                            name="Solution_original")
-    
-    fig, axes = plt.subplots(len(var_names), 1, figsize=(14, len(var_names)*4))
-    fig.subplots_adjust(left=0.35, top=0.88, hspace=0.23)
-
-    for i, var in enumerate(var_names):
-        # axes[i].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
-        axes[i].plot(time_stamps_sim, original_sol_v[var], '-', label=f"{var}_original", color='black')
-        if not original:
-            axes[i].plot(time_stamps_sim, new_sol_v[var], '--', label=f"{var}_refined",color='black')
-        
-        axes[i].set_xlabel("Time (h)", fontsize=14)
-        axes[i].set_ylabel(var, fontsize=14)
-        axes[i].legend()
-        axes[i].grid(True)
-
-    for var in var_exp_names:
-        axes[var_names.index(var)].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
+    fig.suptitle(title, fontsize=15)
+    fig.tight_layout()
+    save_fig_file(fig, fig_outdir, filename)
 
 
-    # Create a text box for parameters and AIC
-    textstr = "\n".join([f"{k}: {v:.4f}" for k, v in parameters_updated.items()])
+# ----------------------------------------------------------------------------------------------
+# Summaries over the iterations of ONE parameter combination (lists extracted from the stored tables)
+# ----------------------------------------------------------------------------------------------
+def plot_sensitivity_summary(fig_outdir: str, sensitivity_list: List[pd.DataFrame], title: str,
+                             filename: str = 'sensitivity_summary.png') -> None:
+    """Mean +- sd of the sensitivity matrices (rows = parameters, columns = states) of several runs."""
+    dfs = [d for d in sensitivity_list if d is not None and not d.empty]
+    if len(dfs) == 0:
+        return
+    params = dfs[0].index.tolist()
+    states = dfs[0].columns.tolist()
+    stacked = np.stack([d.reindex(index=params, columns=states).values.astype(float) for d in dfs], axis=0)
+    mean_sens = np.nanmean(stacked, axis=0)
+    std_sens = np.nanstd(stacked, axis=0)
 
-    fig.text(0.13, 0.6, textstr,
-            ha='left', va='center', fontsize=14,        
-            bbox={'boxstyle': 'square,pad=1.0',
-                'facecolor': 'white',
-                'alpha': 0.8,
-                'edgecolor': 'none'})
-    if AIC == ' ':
-        AIC = float('nan')
-        
-    fig.text(0.2, 0.4, f"AIC = {AIC:.4f}",
-            ha='center', va='top', fontsize=16,
-            fontweight='bold')
-
-    if iteration is None:
-        title = ("Original Model vs. Validation Data")
-    else:
-        params_list = system_data['calibrating_parameters']
-        title = (f"Model {iteration+1}: Fitting {params_list} vs. Validation Data")
-
-    fig.suptitle(title, fontsize=18, linespacing=2, y=0.90)
-
-    if original:
-        save_fig(fig, fig_outdir, "Solution", 'original')
-    else:
-        save_fig(fig, fig_outdir, "Solution", iteration)
-
-
-def solution_comparison(system_data: Dict[str, any],
-                        fig_outdir: str,
-                        model_summary_dict: Dict[str, any]) -> None:
-    """
-    Plots the comparison between the original model parameters and the updated parameters against validation data.
-    Parameters:
-        - params_list: list of parameters that are being calibrated.
-        - parameters_updated: dictionary of updated parameters for the model after calibration.
-        - AIC: Akaike Information Criterion value for the updated model.
-    """
-    var_names = system_data['var_names']
-    var_exp_names = system_data['var_exp_names']
-    time_stamps_sim = system_data['time_stamps_sim']
-    df_val = system_data['df_val']
-    t_exp_v = system_data['t_exp_v']
-    original_sol_v = system_data['original_sol_v']
-    
-    fig, axes = plt.subplots(len(var_names), 1, figsize=(14, len(var_names)*4))
-    fig.subplots_adjust(left=0.35, top=0.88, hspace=0.23)
-
-    n_iterations = len(model_summary_dict['Solution'])
-    palette_set2 = sns.color_palette("Set2", n_colors=n_iterations)
-
-    for i, var in enumerate(var_names):
-        # axes[i].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
-        axes[i].plot(time_stamps_sim, original_sol_v[var], '-', label=f"{var}_og", color='black')
-
-        for iteration in range(len(model_summary_dict['Solution'])):
-            new_sol_v = model_summary_dict['Solution'][iteration]
-            model = model_summary_dict['Model'][iteration]
-            axes[i].plot(time_stamps_sim, new_sol_v[var], '--', label=f"{model}",color=palette_set2[iteration])
-            
-        axes[i].set_xlabel("Time (h)", fontsize=14)
-        axes[i].set_ylabel(var, fontsize=14)
-        axes[i].legend()
-        axes[i].grid(True)
-    for var in var_exp_names:
-        axes[var_names.index(var)].scatter(t_exp_v, df_val[var], marker='o', label=f"{var}_exp_validation", color='black')
-
-    title = ("All Models vs. Validation Data")
-
-    fig.suptitle(title, fontsize=18, linespacing=2, y=0.90)
-
-    save_fig(fig, fig_outdir, "Solution", "summary")
-
-
-# Summary Plotting functions
-def plot_sensitivity_summary(fig_outdir: str, 
-                            model_summary_dict: Dict[str, any],
-                            ) -> None:
-    """Plot sensitivity analysis results for all iterations with mean and std deviation."""
-    
-    sensitivity_df_all = model_summary_dict['Sensitivity']
-
-    stacked_sens = np.stack([df.values for df in sensitivity_df_all if df is not None and not df.empty], axis=0)
-    mean_sens = stacked_sens.mean(axis=0)
-    std_sens  = stacked_sens.std(axis=0)
-
-    params = sensitivity_df_all[0].index.tolist()
-    states = sensitivity_df_all[0].columns.tolist()
-
-    fig, axes = plt.subplots(len(states), 1, figsize=(10, 3*len(states)), sharex=True)
-
+    fig, axes = plt.subplots(len(states), 1, figsize=(10, 3 * len(states)), sharex=True, squeeze=False)
     for j, state in enumerate(states):
-        axes[j].bar(params,
-                    mean_sens[:, j],
-                    yerr=std_sens[:, j],
-                    capsize=4,
-                    color='red',
-                    linewidth=1.5) 
-        axes[j].set_title(f"Sensitivity of “{state}” (mean ± σ)")
-        axes[j].set_ylabel("Sensitivity")
-        axes[j].tick_params(axis="x", rotation=90)
-        axes[j].grid(axis="y", alpha=0.5)
-    axes[-1].set_xlabel("Parameter")
-    plt.tight_layout()
+        ax = axes[j, 0]
+        ax.bar(params, mean_sens[:, j], yerr=std_sens[:, j], capsize=4, color='gray', edgecolor='black', linewidth=1)
+        ax.axhline(0.01, color='black', linestyle='--', linewidth=1)
+        ax.set_title(f"Sensitivity of '{state}' (mean +- sd, {len(dfs)} runs)")
+        ax.set_ylabel("Sensitivity")
+        ax.tick_params(axis="x", rotation=90)
+        ax.grid(axis="y", alpha=0.5)
+    axes[-1, 0].set_xlabel("Parameter")
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    save_fig_file(fig, fig_outdir, filename)
 
-    save_fig(fig, fig_outdir, "Sensitivity", "summary")
 
-def plot_residuals_summary(fig_outdir: str, 
-                            model_summary_dict: Dict[str, any]
-                            ) -> None:
-    """Plot aggregated residuals analysis for all iterations with mean and std deviation."""
-    residuals_all = model_summary_dict['Residuals']
-    if residuals_all is None or len(residuals_all) == 0:
-        print("No residuals data available for summary plot.")
-        return None
-    all_res    = np.concatenate(residuals_all)
+def plot_residuals_summary(fig_outdir: str, residuals_list: List[np.ndarray], title: str,
+                           filename: str = 'residuals_summary.png') -> None:
+    """Aggregated residual histogram and Q-Q plot (mean +- sd over runs)."""
+    residuals_all = [np.asarray(r, dtype=float) for r in residuals_list if r is not None and len(r) > 0]
+    if len(residuals_all) == 0:
+        return
+    all_res = np.concatenate(residuals_all)
     mu_all, std_all = stats.norm.fit(all_res)
 
-    bins       = np.histogram_bin_edges(all_res, bins="auto")
+    bins = np.histogram_bin_edges(all_res, bins="auto")
     bin_centers = (bins[:-1] + bins[1:]) / 2
-    densities  = np.vstack([np.histogram(r, bins=bins, density=True)[0] for r in residuals_all])
-
+    densities = np.vstack([np.histogram(r, bins=bins, density=True)[0] for r in residuals_all])
     mean_den = densities.mean(axis=0)
-    std_den  = densities.std(axis=0)
+    std_den = densities.std(axis=0)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-
     ax0 = axes[0]
-    ax0.bar(bin_centers, mean_den,
-            width=np.diff(bins), alpha=0.7, yerr=std_den,
-            capsize=4, color='blue', linewidth=1.5)
+    ax0.bar(bin_centers, mean_den, width=np.diff(bins), alpha=0.7, yerr=std_den, capsize=4, color='gray',
+            edgecolor='black', linewidth=1)
     x_norm = np.linspace(bin_centers.min(), bin_centers.max(), 200)
     ax0.plot(x_norm, stats.norm.pdf(x_norm, mu_all, std_all), 'k-', lw=2, label="Normal fit")
-    ax0.set_xlabel("Residual value")
+    ax0.set_xlabel("Residual value (range-scaled)")
     ax0.set_ylabel("Density")
-    ax0.set_title("Residuals Histogram\n(mean ± σ) with Normal Fit")
+    ax0.set_title("Residuals histogram (mean +- sd) with normal fit")
     ax0.legend()
     ax0.grid(alpha=0.4)
 
     ax1 = axes[1]
-    m     = residuals_all[0].size
-    probs = (np.arange(1, m+1) - 0.5) / m
-    theo  = stats.norm.ppf(probs, loc=mu_all, scale=std_all)
-    sorted_all = np.vstack([np.sort(r) for r in residuals_all])
-    mean_q     = sorted_all.mean(axis=0)
-    std_q      = sorted_all.std(axis=0)
-
-    ax1.errorbar(theo, mean_q, yerr=std_q, 
-                fmt='o', ecolor='gray', elinewidth=1, capsize=3)
+    m = min(r.size for r in residuals_all)
+    probs = (np.arange(1, m + 1) - 0.5) / m
+    theo = stats.norm.ppf(probs, loc=mu_all, scale=std_all)
+    sorted_all = np.vstack([np.sort(r)[:m] for r in residuals_all])
+    mean_q = sorted_all.mean(axis=0)
+    std_q = sorted_all.std(axis=0)
+    ax1.errorbar(theo, mean_q, yerr=std_q, fmt='o', color='gray', ecolor='gray', elinewidth=1, capsize=3)
     lims = [min(theo.min(), mean_q.min()), max(theo.max(), mean_q.max())]
-    ax1.plot(lims, lims, 'r--')
-    ax1.set_xlabel("Theoretical Quantiles")
-    ax1.set_ylabel("Mean Ordered Residuals")
-    ax1.set_title("Aggregated Q–Q Plot\n(mean ± σ)")
+    ax1.plot(lims, lims, 'k--')
+    ax1.set_xlabel("Theoretical quantiles")
+    ax1.set_ylabel("Mean ordered residuals")
+    ax1.set_title("Aggregated Q-Q plot (mean +- sd)")
     ax1.grid(alpha=0.4)
 
-    plt.tight_layout()
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    save_fig_file(fig, fig_outdir, filename)
 
-    save_fig(fig, fig_outdir, "Residuals_Analysis", "summary")
 
-def plot_corr_summary(system_data: Dict[str, any],
-                        fig_outdir: str,
-                        model_summary_dict: Dict[str, any],
-                        ) -> None:
-    """Plot aggregated correlation matrix for all iterations with mean and std deviation."""
-    
-    parameters_og_list = system_data['parameters_og_list']
-    correlation_matrix_all = model_summary_dict['Correlation']
-    if correlation_matrix_all is None or len(correlation_matrix_all) == 0:
-        print("No correlation data available for summary plot.")
-        return None
-
-    corr_stack = np.stack(correlation_matrix_all, axis=0)
-    mean_corr  = corr_stack.mean(axis=0)
-    std_corr   = corr_stack.std(axis=0)
-    n      = mean_corr.shape[0]
-    annot  = np.empty((n, n), dtype=object)
-
+def plot_corr_summary(fig_outdir: str, corr_list: List[np.ndarray], names: List[str], title: str,
+                      filename: str = 'corr_matrix_summary.png') -> None:
+    """Mean +- sd of the parameter correlation matrices of several runs (same parameters)."""
+    mats = [c for c in corr_list if c is not None]
+    if not mats:
+        return
+    stack = np.stack(mats, axis=0)
+    mean_corr = np.nanmean(stack, axis=0)
+    std_corr = np.nanstd(stack, axis=0)
+    n = mean_corr.shape[0]
+    annot = np.empty((n, n), dtype=object)
     for i in range(n):
         for j in range(n):
-            annot[i, j] = f"{mean_corr[i,j]:.2f}\n±{std_corr[i,j]:.2f}"
+            annot[i, j] = f"{mean_corr[i, j]:.2f}\n+-{std_corr[i, j]:.2f}"
 
-    fig, ax = plt.subplots(figsize=(12, 9))
-    sns.heatmap(mean_corr,
-                annot=annot,
-                fmt="",
-                xticklabels=parameters_og_list,
-                yticklabels=parameters_og_list,
-                cmap="coolwarm",
-                center=0,
-                annot_kws={"fontsize":10, 'fontweight':'bold'},
-                ax=ax)
-    ax.set_title("Parameter Correlation Matrix (mean ± σ)")
-
+    side = max(6.0, 0.9 * n + 3.0)
+    fig, ax = plt.subplots(figsize=(side * 1.2, side))
+    sns.heatmap(mean_corr, annot=annot, fmt="", xticklabels=names, yticklabels=names, cmap="coolwarm", vmin=-1, vmax=1,
+                center=0, annot_kws={"fontsize": 10, 'fontweight': 'bold'}, ax=ax)
+    ax.set_title(title)
     fig.tight_layout()
+    save_fig_file(fig, fig_outdir, filename)
 
-    save_fig(fig, fig_outdir, "Corr_Matrix", "summary")
+
+def plot_combo_solutions(system_data: Dict[str, Any], fig_outdir: str, condition: str, run_ids: List[str],
+                         solutions: Dict[str, Dict[str, Any]], originals: Optional[Dict[str, Any]], title: str,
+                         filename: str = 'solutions_all_iterations.png') -> None:
+    """
+    All iterations of one combination in one figure: rows = states, columns = calibration | validation.
+        solutions : {run_id: {'cal': DataFrame|None, 'val': DataFrame|None}}
+    """
+    var_names = list(system_data['var_names'])
+    var_exp = list(system_data['var_exp_names'])
+    t = np.asarray(system_data['time_stamps_sim'], dtype=float)
+    n = len(var_names)
+    colors = sns.color_palette("Set2", n_colors=max(len(run_ids), 3))
+
+    fig, axes = plt.subplots(n, 2, figsize=(14, 2.6 * n + 1.2), squeeze=False, sharex='col')
+    for j, ds in enumerate(DATASETS):
+        t_exp, df_exp = experiment_data(system_data, condition, ds)
+        xmax = dataset_xmax(system_data, condition, ds)
+        mk = t <= xmax
+        me = t_exp <= xmax
+        for i, var in enumerate(var_names):
+            ax = axes[i, j]
+            o = (originals or {}).get(ds)
+            if o is not None and var in o:
+                ax.plot(t[mk], np.asarray(o[var])[mk], 'k--', lw=1.5, label='Original model', zorder=4)
+            for k, rid in enumerate(run_ids):
+                s = solutions.get(rid, {}).get(ds)
+                if s is not None and var in s:
+                    ax.plot(t[mk], np.asarray(s[var])[mk], '-', color=colors[k], lw=1.6, alpha=0.9,
+                            label=rid.split('__')[-1], zorder=3)
+            if var in var_exp:
+                ax.scatter(t_exp[me], np.asarray(df_exp[var])[me], c='k', marker='o', s=22, label='Experimental data', zorder=5)
+            ax.set_xlim(0, xmax)
+            ax.grid(True, alpha=0.4)
+            if j == 0:
+                ax.set_ylabel(var, fontsize=12)
+            if i == 0:
+                ax.set_title(f"{DATASET_LABEL[ds]}: {dataset_label(system_data, condition, ds)}", fontsize=12)
+            if i == n - 1:
+                ax.set_xlabel('Time (h)', fontsize=12)
+    _shared_legend(fig, axes, ncol=8, y=0.0)
+    fig.suptitle(title, fontsize=14)
+    fig.tight_layout(rect=[0, 0.05, 1, 0.97])
+    save_fig_file(fig, fig_outdir, filename)
+
+
+def plot_combo_summary(system_data: Dict[str, Any], store, combo_id: str, calibration_condition: str = 'N_def') -> None:
+    """
+    Summary figures of one parameter combination over its finished iterations (needs >= 2), built ONLY from the stored
+    tables/trajectories (so it also works for a combination finished in an earlier session).
+    Files: combos/<combo_id>/<condition>_{solutions_all_iterations, sensitivity_summary, corr_matrix_summary,
+           residuals_summary_cal, residuals_summary_val}.png
+    """
+    runs = store.read('runs')
+    runs = runs[(runs['combo_id'] == combo_id) & (runs['status'] == 'done')].sort_values('iteration')
+    run_ids = runs['run_id'].tolist()
+    if len(run_ids) < 2:
+        return
+    outdir = store.combo_dir(combo_id)
+    calibrated = [p for p in str(runs['calibrated_parameters'].iloc[0]).split(';') if p and p != 'nan']
+
+    sens_t = store.read('sensitivity')
+    corr_t = store.read('correlations')
+    res_t = store.read('residuals')
+    for cond in CONDITIONS:
+        sols = {rid: {ds: store.load_solution(rid, cond, ds, t_grid=system_data['time_stamps_sim']) for ds in DATASETS}
+                for rid in run_ids}
+        orig = {ds: store.load_solution('original', cond, ds, t_grid=system_data['time_stamps_sim']) for ds in DATASETS}
+        tag = f"{combo_id} ({', '.join(calibrated)}), {len(run_ids)} runs - {condition_label(system_data, cond)}"
+        plot_combo_solutions(system_data, outdir, cond, run_ids, sols, orig, title=f"All iterations: {tag}",
+                             filename=f"{cond}_solutions_all_iterations.png")
+
+        s = sens_t[(sens_t['condition'] == cond) & (sens_t['run_id'].isin(run_ids))]
+        if not s.empty:
+            lst = [g.pivot(index='parameter', columns='variable', values='sensitivity') for _, g in s.groupby('run_id')]
+            plot_sensitivity_summary(outdir, lst, title=f"Sensitivity: {tag}", filename=f"{cond}_sensitivity_summary.png")
+
+        c = corr_t[(corr_t['condition'] == cond) & (corr_t['run_id'].isin(run_ids))]
+        if not c.empty and calibrated:
+            idx = {p: i for i, p in enumerate(calibrated)}
+            mats = []
+            for _, g in c.groupby('run_id'):
+                m = np.full((len(calibrated), len(calibrated)), np.nan)
+                np.fill_diagonal(m, 1.0)
+                for a, b, k in zip(g['param_1'], g['param_2'], g['kappa']):
+                    if a in idx and b in idx:
+                        m[idx[a], idx[b]] = m[idx[b], idx[a]] = k
+                mats.append(m)
+            plot_corr_summary(outdir, mats, calibrated, title=f"Parameter correlation: {tag}",
+                              filename=f"{cond}_corr_matrix_summary.png")
+
+        for ds in DATASETS:
+            r = res_t[(res_t['condition'] == cond) & (res_t['dataset'] == ds) & (res_t['run_id'].isin(run_ids))]
+            if not r.empty:
+                lst = [g['residual_scaled'].values for _, g in r.groupby('run_id')]
+                plot_residuals_summary(outdir, lst, title=f"Residuals ({DATASET_LABEL[ds].lower()}): {tag}",
+                                       filename=f"{cond}_residuals_summary_{ds}.png")

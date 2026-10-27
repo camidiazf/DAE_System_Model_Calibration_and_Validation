@@ -1,0 +1,3 @@
+combo_id,n_params,parameters,lb,ub
+original,0,,,
+k5_ee6419,5,mu_max;Xmax;YX_C;YX_CO2;n_cap,0.05;0.8;0.05;0.05;0.3,1;2.5;1;1;5

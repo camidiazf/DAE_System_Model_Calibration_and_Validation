@@ -14,3 +14,14 @@ __pycache__/
 *.vscode
 README copy.md
 Paper_results/
+
+# --------------------------------------------
+# Not for the public repo
+# --------------------------------------------
+
+# Any directory with "not_repo" in its name
+*not_repo*/
+
+# Claude working folders
+Experiments_and_package/Claude outputs/
+Experiments_and_package/Claude_paper_draft/
